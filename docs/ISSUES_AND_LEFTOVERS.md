@@ -15,16 +15,15 @@ This is the implementation order I would use. Items near the top either block
 compilation, break realtime correctness, or prevent RVO from being useful for
 real video inference.
 
-1. Fix crate exports and imports.
-   `rvo-camera` exports nothing today, and `DummyDetector` is imported from the
-   wrong module in the binary and scheduler test.
+1. Fixed: crate exports and imports.
+   `rvo-camera` now exports its camera modules, and `DummyDetector` imports now
+   use the crate root re-export.
 
-2. Add all local crates to the workspace.
+2. Fixed: add all local crates to the workspace.
    Without this, workspace checks and tests will not cover the full repository.
 
-3. Make reload cross-platform or guard `SIGHUP`.
-   The current reload path is Unix-oriented, while the active development
-   environment is Windows.
+3. Fixed: make reload cross-platform or guard `SIGHUP`.
+   The reload thread is now Unix-only, while non-Unix builds skip SIGHUP reload.
 
 4. Fix scheduler monotonic time.
    `now.elapsed()` is nearly zero every tick, so event duration and cooldown
@@ -105,12 +104,15 @@ after Rust is installed or available on PATH.
 
 ## P0: Build And Wiring Blockers
 
-These are likely to prevent the current project from compiling or running as
-intended.
+These were likely to prevent the current project from compiling or running as
+intended. The source-level fixes have been applied, but they still need
+`cargo check` verification.
 
 ### `rvo-camera` Exports Nothing
 
-`crates/rvo-camera/src/lib.rs` is empty.
+Status: fixed in source.
+
+`crates/rvo-camera/src/lib.rs` was empty.
 
 But the binary imports:
 
@@ -124,7 +126,7 @@ And the scheduler test imports:
 use rvo_camera::mock::start_mock_camera;
 ```
 
-Required fix:
+Applied fix:
 
 ```rust
 pub mod camera;
@@ -134,6 +136,8 @@ pub use camera::{start_camera, CameraConfig};
 ```
 
 ### `DummyDetector` Is Imported From The Wrong Module
+
+Status: fixed in source.
 
 `DummyDetector` is re-exported from the `rvo-detector` crate root:
 
@@ -150,7 +154,7 @@ use rvo_detector::detector::{DetectorNode, DummyDetector};
 use rvo_detector::detector::DummyDetector;
 ```
 
-Required fix:
+Applied fix:
 
 ```rust
 use rvo_detector::{DummyDetector};
@@ -165,7 +169,9 @@ use rvo_detector::dummy::DummyDetector;
 
 ### Workspace Members Are Incomplete
 
-The root `Cargo.toml` only lists:
+Status: fixed in source.
+
+The root `Cargo.toml` previously listed only:
 
 - `rvo-core`
 - `rvo-signals`
@@ -184,22 +190,23 @@ But the project also contains:
 
 Path dependencies can still compile, but leaving these crates out of the
 workspace means `cargo test --workspace` will not directly cover all local
-crates. Add every crate to the workspace before treating test results as
-complete.
+crates. Every local crate is now listed as a workspace member.
 
 ### `SIGHUP` Is Unix-Oriented
 
-The binary uses:
+Status: fixed in source with platform gating.
+
+The binary used:
 
 ```rust
 use signal_hook::consts::SIGHUP;
 ```
 
 That reload mechanism is natural on Linux, but the current development
-environment is Windows. This needs a platform guard or an alternate reload path
-for Windows.
+environment is Windows. The reload thread is now compiled only on Unix, and
+non-Unix platforms print that SIGHUP reload is disabled.
 
-Options:
+Future options:
 
 - compile SIGHUP reload only on Unix
 - add a control endpoint for reload

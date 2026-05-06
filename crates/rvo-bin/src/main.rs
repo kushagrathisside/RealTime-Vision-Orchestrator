@@ -2,13 +2,12 @@ use std::{thread, time::Duration};
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::bounded;
-use signal_hook::consts::SIGHUP;
-use signal_hook::iterator::Signals;
 
 use rvo_scheduler::scheduler::Scheduler;
 use rvo_metrics::start_metrics_server;
 
-use rvo_detector::detector::{DetectorNode, DummyDetector};
+use rvo_detector::DummyDetector;
+use rvo_detector::detector::DetectorNode;
 use rvo_detector::load::LoadDetector;
 use rvo_detector::jitter::JitterDetector;
 
@@ -61,6 +60,34 @@ fn build_event_engine(cfg: &RvoConfig) -> EventEngine {
     })
 }
 
+#[cfg(unix)]
+fn spawn_reload_thread(scheduler: Arc<Mutex<Scheduler>>) {
+    use signal_hook::consts::SIGHUP;
+    use signal_hook::iterator::Signals;
+
+    thread::spawn(move || {
+        let mut signals = Signals::new([SIGHUP]).expect("signals");
+
+        for _ in signals.forever() {
+            println!("[RVO] SIGHUP received, reloading config");
+
+            let cfg = load_config("config/rvo.yaml");
+            let detectors = build_detectors(&cfg);
+            let event_engine = build_event_engine(&cfg);
+
+            let mut sched = scheduler.lock().unwrap();
+            sched.swap_runtime(detectors, event_engine);
+
+            println!("[RVO] Reload complete");
+        }
+    });
+}
+
+#[cfg(not(unix))]
+fn spawn_reload_thread(_scheduler: Arc<Mutex<Scheduler>>) {
+    println!("[RVO] SIGHUP config reload disabled on this platform");
+}
+
 fn main() {
     // ---------------- metrics ----------------
     start_metrics_server(9090);
@@ -91,27 +118,7 @@ fn main() {
 
     println!("[RVO] Started (camera + clips)");
 
-    // ---------------- reload thread (Section 1.4) ----------------
-    {
-        let scheduler = Arc::clone(&scheduler);
-
-        thread::spawn(move || {
-            let mut signals = Signals::new([SIGHUP]).expect("signals");
-
-            for _ in signals.forever() {
-                println!("[RVO] SIGHUP received, reloading config");
-
-                let cfg = load_config("config/rvo.yaml");
-                let detectors = build_detectors(&cfg);
-                let event_engine = build_event_engine(&cfg);
-
-                let mut sched = scheduler.lock().unwrap();
-                sched.swap_runtime(detectors, event_engine);
-
-                println!("[RVO] Reload complete");
-            }
-        });
-    }
+    spawn_reload_thread(Arc::clone(&scheduler));
 
     // ---------------- main loop ----------------
     loop {

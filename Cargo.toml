@@ -1,9 +1,15 @@
 [workspace]
 members = [
+    "crates/rvo-bin",
+    "crates/rvo-buffer",
+    "crates/rvo-camera",
+    "crates/rvo-clips",
+    "crates/rvo-config",
     "crates/rvo-core",
-    "crates/rvo-signals",
     "crates/rvo-detector",
+    "crates/rvo-events",
+    "crates/rvo-metrics",
     "crates/rvo-scheduler",
-    "crates/rvo-bin"
+    "crates/rvo-signals"
 ]
 resolver = "2"

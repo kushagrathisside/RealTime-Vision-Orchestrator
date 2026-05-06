@@ -124,7 +124,7 @@ mod tests {
     use crossbeam_channel::bounded;
     use std::time::Duration;
     use rvo_camera::mock::start_mock_camera;
-    use rvo_detector::detector::DummyDetector;
+    use rvo_detector::DummyDetector;
     use rvo_events::{EventEngine, EventDefinition, EventType};
     use rvo_clips::ClipManager;
 
