@@ -45,19 +45,23 @@ fn build_detectors(cfg: &RvoConfig) -> Result<Vec<Box<dyn DetectorNode>>, String
 
 /// ---------------- event engine factory ----------------
 fn build_event_engine(cfg: &RvoConfig) -> Result<EventEngine, String> {
-    let e = &cfg.events[0]; // single-event for now
+    let mut defs = Vec::new();
 
-    let event_type = match e.event_type.as_str() {
-        "DummyEvent" => EventType::DummyEvent,
-        other => return Err(format!("Unknown event type: {}", other)),
-    };
+    for e in &cfg.events {
+        let event_type = match e.event_type.as_str() {
+            "DummyEvent" => EventType::DummyEvent,
+            other => return Err(format!("Unknown event type: {}", other)),
+        };
 
-    Ok(EventEngine::new(EventDefinition {
-        event_type,
-        signal_threshold: e.signal_threshold,
-        duration_ns: e.duration_ms * 1_000_000,
-        cooldown_ns: e.cooldown_ms * 1_000_000,
-    }))
+        defs.push(EventDefinition {
+            event_type,
+            signal_threshold: e.signal_threshold,
+            duration_ns: e.duration_ms * 1_000_000,
+            cooldown_ns: e.cooldown_ms * 1_000_000,
+        });
+    }
+
+    Ok(EventEngine::new_many(defs))
 }
 
 fn build_runtime_config(

@@ -11,13 +11,13 @@ enum State {
     Cooldown { until_ns: u64 },
 }
 
-pub struct EventEngine {
+struct EventMachine {
     def: EventDefinition,
     state: State,
 }
 
-impl EventEngine {
-    pub fn new(def: EventDefinition) -> Self {
+impl EventMachine {
+    fn new(def: EventDefinition) -> Self {
         Self {
             def,
             state: State::Idle,
@@ -43,7 +43,7 @@ impl EventEngine {
         }
     }
 
-    pub fn update(
+    fn update(
         &mut self,
         now_ns: u64,
         signals: &SignalStore,
@@ -86,6 +86,36 @@ impl EventEngine {
     }
 }
 
+pub struct EventEngine {
+    machines: Vec<EventMachine>,
+}
+
+impl EventEngine {
+    pub fn new(def: EventDefinition) -> Self {
+        Self::new_many(vec![def])
+    }
+
+    pub fn new_many(defs: Vec<EventDefinition>) -> Self {
+        Self {
+            machines: defs
+                .into_iter()
+                .map(EventMachine::new)
+                .collect(),
+        }
+    }
+
+    pub fn update(
+        &mut self,
+        now_ns: u64,
+        signals: &SignalStore,
+    ) -> Vec<Event> {
+        self.machines
+            .iter_mut()
+            .filter_map(|machine| machine.update(now_ns, signals))
+            .collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,11 +144,11 @@ mod tests {
 
 
         // Before duration: no event
-        assert!(engine.update(500_000_000, &store).is_none());
+        assert!(engine.update(500_000_000, &store).is_empty());
 
         // After duration: event
-        let evt = engine.update(1_500_000_000, &store);
-        assert!(evt.is_some());
+        let events = engine.update(1_500_000_000, &store);
+        assert_eq!(events.len(), 1);
     }
 
     #[test]
@@ -140,11 +170,42 @@ mod tests {
         });
 
         let first = engine.update(0, &store);
-        assert!(first.is_some());
+        assert_eq!(first.len(), 1);
 
         // Within cooldown: no event
         let second = engine.update(500_000_000, &store);
-        assert!(second.is_none());
+        assert!(second.is_empty());
+    }
+
+    #[test]
+    fn multiple_definitions_update_independently() {
+        let defs = vec![
+            EventDefinition {
+                event_type: EventType::DummyEvent,
+                signal_threshold: 1,
+                duration_ns: 0,
+                cooldown_ns: 1_000_000_000,
+            },
+            EventDefinition {
+                event_type: EventType::DummyEvent,
+                signal_threshold: 1,
+                duration_ns: 0,
+                cooldown_ns: 1_000_000_000,
+            },
+        ];
+
+        let mut engine = EventEngine::new_many(defs);
+        let mut store = SignalStore::new();
+        store.upsert(Signal {
+            signal_type: SignalType::Dummy,
+            value: 1,
+            ts_ns: 0,
+            ttl_ns: 2_000_000_000,
+        });
+
+        let events = engine.update(0, &store);
+
+        assert_eq!(events.len(), 2);
     }
 }
 // Event Engine Tests

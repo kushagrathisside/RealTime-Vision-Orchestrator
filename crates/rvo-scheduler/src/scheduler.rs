@@ -111,15 +111,13 @@ impl Scheduler {
             }
         }
 
-        if let Some(event) =
-            self.event_engine.update(now_ns, &self.signal_store)
-        {
+        for event in self.event_engine.update(now_ns, &self.signal_store) {
             METRICS.events_emitted.fetch_add(1, Ordering::Relaxed);
             self.clip_manager.on_event(
                 &event,
                 &self.frame_buffer,
-        );
-    }
+            );
+        }
     }
 
     pub fn swap_runtime(

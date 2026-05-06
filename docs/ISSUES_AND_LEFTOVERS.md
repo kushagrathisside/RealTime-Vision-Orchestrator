@@ -65,7 +65,7 @@ real video inference.
     Real model orchestration needs multiple fresh signal types, not one global
     latest signal.
 
-15. Expand the event engine beyond one hardcoded dummy condition.
+15. Partially fixed: expand the event engine beyond one hardcoded dummy condition.
     Support multiple event definitions and predicates over signal types.
 
 16. Use detector health and latency in scheduler policy.
@@ -488,18 +488,23 @@ Applied fix:
 
 ### Event Engine Supports Only One Hardcoded Condition
 
-Current event condition is:
+Status: partially fixed in source.
+
+Current event condition is still:
 
 ```text
 latest signal value >= threshold
 ```
 
-Required fix:
+Applied fix:
 
 - support multiple event definitions
+- return a list of events per tick
+
+Remaining:
+
 - support conditions over signal types
 - support `all` and `any` predicates
-- return a list of events per tick
 
 ### Detector Health Is Ignored
 
