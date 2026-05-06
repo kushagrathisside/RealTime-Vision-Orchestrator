@@ -54,7 +54,7 @@ real video inference.
     Camera open/read failures need health reporting, retry/backoff, and no
     tight failure loop.
 
-12. Pass frames or frame handles into `DetectorContext`.
+12. Fixed: pass frames or frame handles into `DetectorContext`.
     This is the first major feature required for real DL model integration.
 
 13. Add detector metadata and dependency gating.
@@ -424,7 +424,9 @@ deep-learning models on live video.
 
 ### Detectors Do Not Receive Frames
 
-`DetectorContext` currently contains only:
+Status: fixed in source.
+
+`DetectorContext` previously contained only:
 
 ```rust
 pub now_ns: u64
@@ -432,12 +434,18 @@ pub now_ns: u64
 
 A real model needs access to at least the latest frame or a frame handle.
 
-Required fix:
+Applied fix:
 
 - include optional frame access in `DetectorContext`
 - decide whether detectors get cloned `Mat`, borrowed frame views, or an
   immutable frame handle
 - avoid unbounded copies on the hot path
+
+Current shape:
+
+- `FrameBuffer` exposes `newest_frame()`.
+- `Scheduler` snapshots the latest frame once per tick.
+- `DetectorContext` carries `frame: Option<&Frame>`.
 
 ### No Detector Dependency Model
 

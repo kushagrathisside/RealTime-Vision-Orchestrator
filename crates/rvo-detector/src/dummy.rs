@@ -17,7 +17,7 @@ impl DetectorNode for DummyDetector {
         30.0
     }
 
-    fn execute(&mut self, ctx: &DetectorContext) -> DetectorResult {
+    fn execute(&mut self, ctx: &DetectorContext<'_>) -> DetectorResult {
         let signal = Signal {
             value: 1,
             ts_ns: ctx.now_ns,

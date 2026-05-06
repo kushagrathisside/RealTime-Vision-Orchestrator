@@ -49,7 +49,7 @@ impl FrameBuffer {
         out
     }
 
-    pub fn newest_instant(&self) -> Option<Instant> {
+    fn newest(&self) -> Option<&Frame> {
         let mut newest: Option<&Frame> = None;
 
         for slot in &self.frames {
@@ -60,7 +60,15 @@ impl FrameBuffer {
             }
         }
 
-        newest.map(|f| f.ts)
+        newest
+    }
+
+    pub fn newest_frame(&self) -> Option<Frame> {
+        self.newest().cloned()
+    }
+
+    pub fn newest_instant(&self) -> Option<Instant> {
+        self.newest().map(|f| f.ts)
     }
 
 }
@@ -113,6 +121,20 @@ mod tests {
         let buf = FrameBuffer::new(2);
 
         assert!(buf.newest_instant().is_none());
+    }
+
+    #[test]
+    fn newest_frame_returns_latest_frame() {
+        let mut buf = FrameBuffer::new(3);
+        let t0 = Instant::now();
+
+        buf.push(dummy_frame(1, t0 + Duration::from_millis(10)));
+        buf.push(dummy_frame(3, t0 + Duration::from_millis(30)));
+        buf.push(dummy_frame(2, t0 + Duration::from_millis(20)));
+
+        let frame = buf.newest_frame().expect("newest frame");
+
+        assert_eq!(frame.id, 3);
     }
 }
 

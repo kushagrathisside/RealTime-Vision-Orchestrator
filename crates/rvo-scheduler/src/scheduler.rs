@@ -69,6 +69,7 @@ impl Scheduler {
 
         let now = Instant::now();
         let now_ns = now.duration_since(self.started_at).as_nanos() as u64;
+        let latest_frame = self.frame_buffer.newest_frame();
 
         for (i, detector) in self.detectors.iter_mut().enumerate() {
 
@@ -80,7 +81,10 @@ impl Scheduler {
                 continue;
             }
 
-            let ctx = DetectorContext { now_ns };
+            let ctx = DetectorContext {
+                now_ns,
+                frame: latest_frame.as_ref(),
+            };
             let result = detector.execute(&ctx);
 
             METRICS.detector_execs.fetch_add(1, Ordering::Relaxed);

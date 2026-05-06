@@ -26,7 +26,7 @@ impl DetectorNode for LoadDetector {
         10.0
     }
 
-    fn execute(&mut self, ctx: &DetectorContext) -> DetectorResult {
+    fn execute(&mut self, _ctx: &DetectorContext<'_>) -> DetectorResult {
         let start = Instant::now();
 
         // Busy-spin (NO sleep — real CPU pressure)

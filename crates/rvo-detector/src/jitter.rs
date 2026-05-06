@@ -18,7 +18,7 @@ impl DetectorNode for JitterDetector {
         30.0
     }
 
-    fn execute(&mut self, ctx: &DetectorContext) -> DetectorResult {
+    fn execute(&mut self, _ctx: &DetectorContext<'_>) -> DetectorResult {
         let jitter = thread_rng().gen_range(0..2_000_000); // up to 2ms
         let start = std::time::Instant::now();
 
