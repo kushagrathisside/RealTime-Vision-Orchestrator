@@ -57,11 +57,11 @@ real video inference.
 12. Fixed: pass frames or frame handles into `DetectorContext`.
     This is the first major feature required for real DL model integration.
 
-13. Add detector metadata and dependency gating.
+13. Fixed: add detector metadata and dependency gating.
     The scheduler needs declared dependencies, frame requirements, output signal
     types, cost hints, and enabled state.
 
-14. Replace the single-slot signal store with typed signal slots.
+14. Fixed: replace the single-slot signal store with typed signal slots.
     Real model orchestration needs multiple fresh signal types, not one global
     latest signal.
 
@@ -449,7 +449,9 @@ Current shape:
 
 ### No Detector Dependency Model
 
-The scheduler currently gates detectors only by `max_fps`.
+Status: fixed in source for the first typed-signal shape.
+
+Original issue: the scheduler gated detectors only by `max_fps`.
 
 For model orchestration, it needs dependency checks such as:
 
@@ -457,17 +459,28 @@ For model orchestration, it needs dependency checks such as:
 - run OCR only when document region exists
 - run expensive classifier only when object detector has a fresh match
 
-Required fix:
+Applied fix:
 
 - add detector metadata
 - add dependency signal types
 - skip execution when dependencies are absent or stale
 
+Current shape:
+
+- `DetectorNode::meta()` exposes dependencies, output signals, cost hint, and
+  frame requirement.
+- `Scheduler` skips detectors when declared signal dependencies are missing or
+  stale.
+- `Scheduler` skips detectors that require a frame when no latest frame exists.
+
 ### SignalStore Supports Only One Signal Slot
 
-The current signal store cannot represent multiple typed model outputs.
+Status: fixed in source for the current `Dummy` signal set.
 
-Required fix:
+Original issue: the signal store could not represent multiple typed model
+outputs.
+
+Applied fix:
 
 - add signal type to `Signal`
 - store one latest slot per `SignalType`

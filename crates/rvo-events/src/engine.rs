@@ -1,4 +1,4 @@
-use rvo_signals::store::SignalStore;
+use rvo_signals::store::{SignalStore, SignalType};
 use crate::event::Event;
 use crate::EventDefinition;
 
@@ -50,7 +50,7 @@ impl EventEngine {
     ) -> Option<Event> {
         // Dummy condition: signal value >= threshold
         let condition = signals
-            .get(now_ns)
+            .get(SignalType::Dummy, now_ns)
             .map(|s| s.value >= self.def.signal_threshold)
             .unwrap_or(false);
 
@@ -90,8 +90,7 @@ impl EventEngine {
 mod tests {
     use super::*;
     use crate::event::EventType;
-    use rvo_signals::store::Signal;
-    use rvo_signals::store::SignalStore;
+    use rvo_signals::store::{Signal, SignalStore, SignalType};
 
     #[test]
     fn event_triggers_after_duration() {
@@ -107,6 +106,7 @@ mod tests {
 
         // Simulate signal present
         store.upsert(Signal {
+            signal_type: SignalType::Dummy,
             value: 1,
             ts_ns: 0,
             ttl_ns: 2_000_000_000,
@@ -133,6 +133,7 @@ mod tests {
         let mut engine = EventEngine::new(def);
         let mut store = SignalStore::new();
         store.upsert(Signal {
+            signal_type: SignalType::Dummy,
             value: 1,
             ts_ns: 0,
             ttl_ns: 2_000_000_000,

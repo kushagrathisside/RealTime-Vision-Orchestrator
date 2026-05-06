@@ -81,6 +81,21 @@ impl Scheduler {
                 continue;
             }
 
+            if detector.requires_frame() && latest_frame.is_none() {
+                METRICS.detector_skips.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
+            let dependencies_fresh = detector
+                .dependencies()
+                .iter()
+                .all(|dep| self.signal_store.get(*dep, now_ns).is_some());
+
+            if !dependencies_fresh {
+                METRICS.detector_skips.fetch_add(1, Ordering::Relaxed);
+                continue;
+            }
+
             let ctx = DetectorContext {
                 now_ns,
                 frame: latest_frame.as_ref(),

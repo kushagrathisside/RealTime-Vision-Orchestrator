@@ -1,21 +1,26 @@
 use rand::{thread_rng, Rng};
 use crate::detector::{
+    DetectorCostHint,
     DetectorNode,
     DetectorContext,
     DetectorResult,
     DetectorHealth,
+    DetectorMeta,
 };
 
 
 pub struct JitterDetector;
 
 impl DetectorNode for JitterDetector {
-    fn id(&self) -> &'static str {
-        "jitter"
-    }
-
-    fn max_fps(&self) -> f64 {
-        30.0
+    fn meta(&self) -> DetectorMeta {
+        DetectorMeta {
+            id: "jitter",
+            max_fps: 30.0,
+            dependencies: &[],
+            output_signals: &[],
+            cost_hint: DetectorCostHint::Medium,
+            requires_frame: false,
+        }
     }
 
     fn execute(&mut self, _ctx: &DetectorContext<'_>) -> DetectorResult {

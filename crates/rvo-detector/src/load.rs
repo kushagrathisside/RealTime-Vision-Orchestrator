@@ -1,11 +1,13 @@
-use std::time::{Duration, Instant};
-use crate::detector::{
-    DetectorNode,
-    DetectorContext,
-    DetectorResult,
-    DetectorHealth,
-};
+use std::time::Instant;
 
+use crate::detector::{
+    DetectorContext,
+    DetectorCostHint,
+    DetectorHealth,
+    DetectorMeta,
+    DetectorNode,
+    DetectorResult,
+};
 
 pub struct LoadDetector {
     busy_ns: u64,
@@ -18,18 +20,20 @@ impl LoadDetector {
 }
 
 impl DetectorNode for LoadDetector {
-    fn id(&self) -> &'static str {
-        "synthetic_load"
-    }
-
-    fn max_fps(&self) -> f64 {
-        10.0
+    fn meta(&self) -> DetectorMeta {
+        DetectorMeta {
+            id: "synthetic_load",
+            max_fps: 10.0,
+            dependencies: &[],
+            output_signals: &[],
+            cost_hint: DetectorCostHint::High,
+            requires_frame: false,
+        }
     }
 
     fn execute(&mut self, _ctx: &DetectorContext<'_>) -> DetectorResult {
         let start = Instant::now();
 
-        // Busy-spin (NO sleep — real CPU pressure)
         while start.elapsed().as_nanos() < self.busy_ns as u128 {}
 
         DetectorResult {
