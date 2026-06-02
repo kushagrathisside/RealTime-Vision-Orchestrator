@@ -147,4 +147,5 @@ ls clips/                 # evidence output
 
 ## Architecture
 
-See [Architecture](ARCHITECTURE.md) for the full syste
+See [Architecture](ARCHITECTURE.md) for the full system design, data flow, and
+component contracts.

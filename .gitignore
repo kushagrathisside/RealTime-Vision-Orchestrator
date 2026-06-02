@@ -4,6 +4,9 @@
 # Python/local environments
 /venv/
 /.venv/
+__pycache__/
+*.py[cod]
+*$py.class
 
 # Logs and local diagnostics
 *.log
@@ -13,6 +16,8 @@
 Thumbs.db
 .idea/
 .vscode/
+*.swp
+*~
 
 # Local environment files
 .env

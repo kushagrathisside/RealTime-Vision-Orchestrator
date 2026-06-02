@@ -9,7 +9,9 @@ members = [
     "crates/rvo-detector",
     "crates/rvo-events",
     "crates/rvo-metrics",
+    "crates/rvo-scenarios",
     "crates/rvo-scheduler",
-    "crates/rvo-signals"
+    "crates/rvo-signals",
+    "crates/rvo-testkit"
 ]
 resolver = "2"

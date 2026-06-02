@@ -30,11 +30,7 @@ impl FrameBuffer {
     }
 
     /// Snapshot slice by time window (cold path only)
-    pub fn slice(
-        &self,
-        start: Instant,
-        end: Instant,
-    ) -> Vec<Frame> {
+    pub fn slice(&self, start: Instant, end: Instant) -> Vec<Frame> {
         let mut out = Vec::new();
 
         for slot in &self.frames {
@@ -70,9 +66,7 @@ impl FrameBuffer {
     pub fn newest_instant(&self) -> Option<Instant> {
         self.newest().map(|f| f.ts)
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {

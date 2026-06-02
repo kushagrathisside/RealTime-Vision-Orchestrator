@@ -75,12 +75,7 @@ fn default_clips_dir() -> String {
 
 /// Known signal type strings. Must stay in sync with `SignalType` in
 /// `rvo-signals`.
-const KNOWN_SIGNAL_TYPES: &[&str] = &[
-    "Dummy",
-    "MotionLevel",
-    "FacePresent",
-    "PersonDetected",
-];
+const KNOWN_SIGNAL_TYPES: &[&str] = &["Dummy", "MotionLevel", "FacePresent", "PersonDetected"];
 
 const KNOWN_EVENT_TYPES: &[&str] = &["DummyEvent"];
 
@@ -95,4 +90,38 @@ impl RvoConfig {
         }
 
         for d in &self.detectors {
-     
+            match d.kind.as_str() {
+                "dummy" | "load" | "jitter" => {}
+                other => return Err(format!("Unknown detector kind: {}", other)),
+            }
+
+            if d.kind == "load" && d.busy_ns.is_none() {
+                return Err("Detector 'load' requires busy_ns".into());
+            }
+        }
+
+        for e in &self.events {
+            if !KNOWN_EVENT_TYPES.contains(&e.event_type.as_str()) {
+                return Err(format!("Unknown event type: {}", e.event_type));
+            }
+
+            if !KNOWN_SIGNAL_TYPES.contains(&e.signal_type.as_str()) {
+                return Err(format!(
+                    "Unknown signal_type '{}' in event '{}'. Known: {:?}",
+                    e.signal_type, e.event_type, KNOWN_SIGNAL_TYPES
+                ));
+            }
+
+            // duration_ms == 0 is valid: instant trigger, confidence = 1.0.
+
+            if e.cooldown_ms == 0 {
+                return Err(format!(
+                    "Event '{}' has zero cooldown — this would cause continuous emission",
+                    e.event_type
+                ));
+            }
+        }
+
+        Ok(())
+    }
+}

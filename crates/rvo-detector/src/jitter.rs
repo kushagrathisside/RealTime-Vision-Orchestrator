@@ -1,13 +1,7 @@
-use rand::{thread_rng, Rng};
 use crate::detector::{
-    DetectorCostHint,
-    DetectorNode,
-    DetectorContext,
-    DetectorResult,
-    DetectorHealth,
-    DetectorMeta,
+    DetectorContext, DetectorCostHint, DetectorHealth, DetectorMeta, DetectorNode, DetectorResult,
 };
-
+use rand::{thread_rng, Rng};
 
 pub struct JitterDetector;
 

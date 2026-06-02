@@ -1,5 +1,5 @@
 pub mod detector;
-pub mod load;
-pub mod jitter;
 pub mod dummy;
+pub mod jitter;
+pub mod load;
 pub use dummy::DummyDetector;

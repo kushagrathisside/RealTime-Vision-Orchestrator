@@ -138,4 +138,66 @@ if clip extraction fails or is dropped.
 
 ## Evidence Pipeline
 
-The evidence pipeline is explicitly best-
+The evidence pipeline is explicitly best-effort:
+
+- Clip jobs use `try_send` — never blocks the live path.
+- The encoder thread works at its own pace.
+- Failed or slow encoding does not affect the scheduler.
+- Post-roll frames are captured by a sleeping thread, not by blocking the tick.
+
+Evidence artifacts (JPEGs + meta.json) are written to `clips_dir`. Future work:
+video muxing into MP4/MKV, thumbnail extraction, metadata store.
+
+## Load Shedding
+
+When a detector's execution time exceeds 2× its FPS budget, it enters backoff:
+
+```
+cost_hint → backoff duration
+Low       → 0 ms   (always recovers)
+Medium    → 100 ms
+High      → 500 ms
+```
+
+The invariant: RVO degrades by doing less work per unit time, not by
+accumulating a backlog of stale work.
+
+## Observability
+
+Every significant state change produces a metric increment. Prometheus-style
+text at `/metrics`; process-alive check at `/health`.
+
+Key metric families: frame drops, scheduler tick rate, detector executions and
+skips and latency, event counts, clip drops.
+
+## Design Boundaries
+
+RVO is **not**:
+- a computer vision model or training framework
+- a video codec or muxer
+- a general-purpose distributed compute engine
+- a durable event log
+
+RVO **is**:
+- a realtime orchestration runtime for video AI models
+- a bounded message path for frames and signals
+- a time-aware scheduler for model execution
+- a temporal event confirmation engine
+- a best-effort evidence pipeline
+
+## Distributed Future
+
+The current code runs as a single process. The component boundaries are chosen
+so that each can later move across a process or host boundary:
+
+- stream ingest
+- scheduler runtime
+- detector worker pools
+- event publisher
+- clip encoder
+- artifact storage
+- metrics collection
+
+The core contracts (bounded queues, freshness-first, typed signals, temporal
+event semantics, no slow work on the live path) should hold in the distributed
+form exactly as they do today.

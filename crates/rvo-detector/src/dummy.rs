@@ -1,12 +1,7 @@
-use rvo_signals::store::{Signal, SignalType};
 use crate::detector::{
-    DetectorCostHint,
-    DetectorContext,
-    DetectorHealth,
-    DetectorMeta,
-    DetectorNode,
-    DetectorResult,
+    DetectorContext, DetectorCostHint, DetectorHealth, DetectorMeta, DetectorNode, DetectorResult,
 };
+use rvo_signals::store::{Signal, SignalType};
 
 pub struct DummyDetector;
 

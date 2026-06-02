@@ -1,12 +1,7 @@
 use std::time::Instant;
 
 use crate::detector::{
-    DetectorContext,
-    DetectorCostHint,
-    DetectorHealth,
-    DetectorMeta,
-    DetectorNode,
-    DetectorResult,
+    DetectorContext, DetectorCostHint, DetectorHealth, DetectorMeta, DetectorNode, DetectorResult,
 };
 
 pub struct LoadDetector {

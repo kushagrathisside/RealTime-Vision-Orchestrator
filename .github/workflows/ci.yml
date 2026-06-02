@@ -50,6 +50,9 @@ jobs:
       - name: cargo test
         run: cargo test --workspace
 
+      - name: cargo check examples
+        run: cargo check -p rvo-bin --examples
+
       - name: cargo clippy
         run: cargo clippy --workspace -- -D warnings
 

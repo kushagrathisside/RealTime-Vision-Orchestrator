@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-# dashmap remov
+# dashmap removed: SignalStore uses a fixed Vec<SignalSlot> keyed by enum index,
+# not a hash map. Re-add if a dynamic signal registry is ever needed.

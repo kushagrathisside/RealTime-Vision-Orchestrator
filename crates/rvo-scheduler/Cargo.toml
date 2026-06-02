@@ -16,3 +16,6 @@ rvo-events = { path = "../rvo-events" }
 rvo-buffer = { path = "../rvo-buffer" }
 rvo-clips = { path = "../rvo-clips" }
 rvo-metrics = { path = "../rvo-metrics" }
+
+[dev-dependencies]
+rvo-testkit = { path = "../rvo-testkit" }

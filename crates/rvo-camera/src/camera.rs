@@ -24,27 +24,29 @@ pub struct CameraConfig {
 impl CameraConfig {
     /// Convenience constructor for the common local-webcam case.
     pub fn device(index: i32) -> Self {
-        Self { source: CameraSource::Device(index) }
+        Self {
+            source: CameraSource::Device(index),
+        }
     }
 
     /// Convenience constructor for RTSP and other URI sources.
     pub fn uri(url: impl Into<String>) -> Self {
-        Self { source: CameraSource::Uri(url.into()) }
+        Self {
+            source: CameraSource::Uri(url.into()),
+        }
     }
 }
 
 pub fn start_camera(cfg: CameraConfig, tx: Sender<Frame>) {
     thread::spawn(move || {
         let mut cam = match &cfg.source {
-            CameraSource::Device(idx) => {
-                match videoio::VideoCapture::new(*idx, videoio::CAP_ANY) {
-                    Ok(c) => c,
-                    Err(err) => {
-                        eprintln!("[CAMERA] Failed to open device {}: {}", idx, err);
-                        return;
-                    }
+            CameraSource::Device(idx) => match videoio::VideoCapture::new(*idx, videoio::CAP_ANY) {
+                Ok(c) => c,
+                Err(err) => {
+                    eprintln!("[CAMERA] Failed to open device {}: {}", idx, err);
+                    return;
                 }
-            }
+            },
             CameraSource::Uri(uri) => {
                 match videoio::VideoCapture::from_file(uri.as_str(), videoio::CAP_ANY) {
                     Ok(c) => c,
@@ -53,4 +55,46 @@ pub fn start_camera(cfg: CameraConfig, tx: Sender<Frame>) {
                         return;
                     }
                 }
-        
+            }
+        };
+
+        cam.set(videoio::CAP_PROP_FPS, 30.0).ok();
+
+        let mut frame_id: u64 = 0;
+        let mut consecutive_failures: u64 = 0;
+
+        loop {
+            let mut img = Mat::default();
+
+            if !cam.read(&mut img).unwrap_or(false) {
+                consecutive_failures += 1;
+
+                // Log on first failure and every 300 afterward (~10 s at 30 fps)
+                if consecutive_failures == 1 || consecutive_failures % 300 == 0 {
+                    eprintln!(
+                        "[CAMERA] Read failed (consecutive={})",
+                        consecutive_failures
+                    );
+                }
+
+                thread::sleep(Duration::from_millis(10));
+                continue;
+            }
+
+            consecutive_failures = 0;
+
+            let frame = Frame {
+                ts: Instant::now(),
+                id: frame_id,
+                image: img,
+            };
+
+            // Non-blocking send. Drop and count if the scheduler is behind.
+            if tx.try_send(frame).is_err() {
+                METRICS.frame_drops.fetch_add(1, Ordering::Relaxed);
+            }
+
+            frame_id += 1;
+        }
+    });
+}

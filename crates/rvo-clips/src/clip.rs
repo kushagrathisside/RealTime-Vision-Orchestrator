@@ -1,5 +1,5 @@
-use std::time::Instant;
 use rvo_events::EventType;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub struct ClipJob {

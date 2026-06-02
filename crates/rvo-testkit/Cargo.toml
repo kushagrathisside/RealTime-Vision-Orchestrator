@@ -1,0 +1,16 @@
+[package]
+name = "rvo-testkit"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossbeam-channel = "0.5"
+opencv = { version = "0.88", default-features = false, features = ["imgproc", "videoio"] }
+rand = { version = "0.8", features = ["small_rng"] }
+rvo-buffer = { path = "../rvo-buffer" }
+rvo-clips = { path = "../rvo-clips" }
+rvo-detector = { path = "../rvo-detector" }
+rvo-events = { path = "../rvo-events" }
+rvo-metrics = { path = "../rvo-metrics" }
+rvo-scheduler = { path = "../rvo-scheduler" }
+rvo-signals = { path = "../rvo-signals" }

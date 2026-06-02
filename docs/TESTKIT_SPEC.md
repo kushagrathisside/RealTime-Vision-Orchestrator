@@ -6,6 +6,8 @@ etc.) that has access to the repository but has not read the full session
 history. Follow the sections in order — earlier sections define types that
 later sections depend on.
 
+> Note: all changes described in this spec have now been implemented in the repository.
+
 ---
 
 ## 0. Context: What Exists Today

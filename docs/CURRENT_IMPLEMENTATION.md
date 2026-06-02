@@ -207,4 +207,53 @@ Encoder worker:
 **Channel logger** (`start_event_logger`): always active; logs to stdout.
 
 **File sink** (`start_event_file_sink`): active when `event_log` is set.
-Appends one JSON line per event to the 
+Appends one JSON line per event to the configured path, flushes after each
+write. Format:
+
+```json
+{"event_type":"DummyEvent","ts_ns":1234567890,"confidence":1.0}
+```
+
+## Metrics
+
+`http://127.0.0.1:9090/metrics` — Prometheus text format.
+`http://127.0.0.1:9090/health` — `200 ok` while process is alive.
+
+Counters:
+
+| Metric | Description |
+|---|---|
+| `rvo_scheduler_ticks` | Total scheduler tick calls |
+| `rvo_detector_exec_total` | Detector executions |
+| `rvo_detector_skip_total` | Detector skips (FPS cap, backoff, deps) |
+| `rvo_detector_failure_total` | Detectors disabled by Failed health |
+| `rvo_detector_exec_ns_total` | Aggregate detector execution nanoseconds |
+| `rvo_events_emitted_total` | Confirmed events emitted |
+| `rvo_frame_drops_total` | Frames dropped (camera channel full) |
+| `rvo_clip_drops_total` | Clip jobs dropped (encoder queue full or no frames) |
+| `rvo_event_drops_total` | Events dropped (publisher channel full) |
+
+## Hot Reload
+
+`SIGHUP` (Unix only): reload config from the path used at startup, rebuild
+detectors and event engine, swap into the running scheduler atomically.
+Invalid configs keep the current runtime active and log the error.
+
+## Build and Run
+
+CI: `.github/workflows/ci.yml` runs `cargo check --workspace`,
+`cargo test --workspace`, `cargo clippy -- -D warnings`, `cargo fmt --check`.
+
+```sh
+# Run with default config
+cargo run -p rvo-bin
+
+# Override config path
+RVO_CONFIG=/path/to/config.yaml cargo run -p rvo-bin
+
+# Observe
+curl http://127.0.0.1:9090/metrics
+curl http://127.0.0.1:9090/health
+tail -f events.jsonl          # if event_log is configured
+ls clips/                     # clip output directories
+```

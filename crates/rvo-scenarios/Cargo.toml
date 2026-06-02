@@ -1,0 +1,15 @@
+[package]
+name = "rvo-scenarios"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+rvo-buffer = { path = "../rvo-buffer" }
+rvo-detector = { path = "../rvo-detector" }
+rvo-events = { path = "../rvo-events" }
+rvo-metrics = { path = "../rvo-metrics" }
+rvo-signals = { path = "../rvo-signals" }
+rvo-testkit = { path = "../rvo-testkit" }

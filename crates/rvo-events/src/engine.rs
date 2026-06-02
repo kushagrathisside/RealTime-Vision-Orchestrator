@@ -1,7 +1,6 @@
-use rvo_signals::store::SignalStore;
-use crate::condition::Condition;
 use crate::event::Event;
 use crate::EventDefinition;
+use rvo_signals::store::SignalStore;
 
 #[derive(Clone, Copy)]
 enum State {
@@ -42,11 +41,7 @@ impl EventMachine {
         }
     }
 
-    fn update(
-        &mut self,
-        now_ns: u64,
-        signals: &SignalStore,
-    ) -> Option<Event> {
+    fn update(&mut self, now_ns: u64, signals: &SignalStore) -> Option<Event> {
         let condition_met = self.def.condition.evaluate(signals, now_ns);
 
         match self.state {
@@ -70,7 +65,15 @@ impl EventMachine {
 
             State::Cooldown { until_ns } => {
                 if now_ns >= until_ns {
-                    self.state = State::Idle;
+                    if condition_met {
+                        if self.def.duration_ns == 0 {
+                            return Some(self.emit_event(now_ns, now_ns));
+                        } else {
+                            self.state = State::Potential { start_ns: now_ns };
+                        }
+                    } else {
+                        self.state = State::Idle;
+                    }
                 }
             }
         }
@@ -94,11 +97,7 @@ impl EventEngine {
         }
     }
 
-    pub fn update(
-        &mut self,
-        now_ns: u64,
-        signals: &SignalStore,
-    ) -> Vec<Event> {
+    pub fn update(&mut self, now_ns: u64, signals: &SignalStore) -> Vec<Event> {
         self.machines
             .iter_mut()
             .filter_map(|machine| machine.update(now_ns, signals))
@@ -109,12 +108,17 @@ impl EventEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::condition::{Condition, CompareOp, SignalPredicate};
+    use crate::condition::{CompareOp, Condition, SignalPredicate};
     use crate::event::EventType;
     use rvo_signals::store::{Signal, SignalStore, SignalType};
 
     fn dummy_signal(value: u64, ttl_ns: u64) -> Signal {
-        Signal { signal_type: SignalType::Dummy, value, ts_ns: 0, ttl_ns }
+        Signal {
+            signal_type: SignalType::Dummy,
+            value,
+            ts_ns: 0,
+            ttl_ns,
+        }
     }
 
     #[test]
@@ -122,7 +126,7 @@ mod tests {
         let def = EventDefinition {
             event_type: EventType::DummyEvent,
             condition: Condition::single_gte(SignalType::Dummy, 1),
-            duration_ns: 1_000_000_000,  // 1s
+            duration_ns: 1_000_000_000, // 1s
             cooldown_ns: 5_000_000_000,
         };
 
@@ -191,4 +195,76 @@ mod tests {
         let def = EventDefinition {
             event_type: EventType::DummyEvent,
             condition: Condition::All(vec![
-                SignalPredicate { signal_type: SignalType::Dum
+                SignalPredicate {
+                    signal_type: SignalType::Dummy,
+                    op: CompareOp::Gte,
+                    value: 1,
+                },
+                SignalPredicate {
+                    signal_type: SignalType::FacePresent,
+                    op: CompareOp::Eq,
+                    value: 1,
+                },
+            ]),
+            duration_ns: 0,
+            cooldown_ns: 1_000_000_000,
+        };
+
+        let mut engine = EventEngine::new(def);
+        let mut store = SignalStore::new();
+
+        // Only Dummy is set — All condition fails
+        store.upsert(dummy_signal(1, 10_000_000_000));
+        assert!(engine.update(0, &store).is_empty());
+
+        // Both signals set — All condition passes
+        store.upsert(Signal {
+            signal_type: SignalType::FacePresent,
+            value: 1,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
+        assert_eq!(engine.update(100, &store).len(), 1);
+    }
+
+    #[test]
+    fn any_condition_passes_on_one_signal() {
+        let def = EventDefinition {
+            event_type: EventType::DummyEvent,
+            condition: Condition::Any(vec![
+                SignalPredicate {
+                    signal_type: SignalType::Dummy,
+                    op: CompareOp::Gte,
+                    value: 1,
+                },
+                SignalPredicate {
+                    signal_type: SignalType::MotionLevel,
+                    op: CompareOp::Gte,
+                    value: 50,
+                },
+            ]),
+            duration_ns: 0,
+            cooldown_ns: 1_000_000_000,
+        };
+
+        let mut engine = EventEngine::new(def);
+        let mut store = SignalStore::new();
+
+        // Only MotionLevel set above threshold — Any passes
+        store.upsert(Signal {
+            signal_type: SignalType::MotionLevel,
+            value: 100,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
+        assert_eq!(engine.update(0, &store).len(), 1);
+    }
+}
+
+/*
+What this proves:
+1. Temporal logic works (duration, cooldown)
+2. No dependency on frames
+3. Deterministic behavior
+4. Condition DSL (All/Any) routes correctly to typed signals
+*/

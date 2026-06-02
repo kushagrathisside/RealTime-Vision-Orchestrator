@@ -6,3 +6,5 @@ edition = "2021"
 [dependencies]
 opencv = { version = "0.88", default-features = false }
 crossbeam-channel = "0.5"
+rvo-buffer = { path = "../rvo-buffer" }
+rvo-metrics = { path = "../rvo-metrics" }

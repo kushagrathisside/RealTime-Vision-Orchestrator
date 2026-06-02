@@ -7,3 +7,6 @@ edition = "2021"
 crossbeam-channel = "0.5"
 rvo-buffer = { path = "../rvo-buffer" }
 rvo-events = { path = "../rvo-events" }
+rvo-metrics = { path = "../rvo-metrics" }
+opencv = { version = "0.88", default-features = false, features = ["imgcodecs"] }
+serde_json = "1.0"

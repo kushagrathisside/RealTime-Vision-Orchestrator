@@ -31,9 +31,9 @@ impl SignalPredicate {
             .get(self.signal_type, now_ns)
             .map(|s| match self.op {
                 CompareOp::Gte => s.value >= self.value,
-                CompareOp::Gt  => s.value >  self.value,
-                CompareOp::Eq  => s.value == self.value,
-                CompareOp::Lt  => s.value <  self.value,
+                CompareOp::Gt => s.value > self.value,
+                CompareOp::Eq => s.value == self.value,
+                CompareOp::Lt => s.value < self.value,
                 CompareOp::Lte => s.value <= self.value,
             })
             .unwrap_or(false)
@@ -110,12 +110,30 @@ mod tests {
     #[test]
     fn all_requires_every_predicate() {
         let mut store = SignalStore::new();
-        store.upsert(Signal { signal_type: SignalType::Dummy,  value: 1, ts_ns: 0, ttl_ns: 10_000_000_000 });
-        store.upsert(Signal { signal_type: SignalType::FacePresent, value: 0, ts_ns: 0, ttl_ns: 10_000_000_000 });
+        store.upsert(Signal {
+            signal_type: SignalType::Dummy,
+            value: 1,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
+        store.upsert(Signal {
+            signal_type: SignalType::FacePresent,
+            value: 0,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
 
         let cond = Condition::All(vec![
-            SignalPredicate { signal_type: SignalType::Dummy,       op: CompareOp::Gte, value: 1 },
-            SignalPredicate { signal_type: SignalType::FacePresent,  op: CompareOp::Eq,  value: 1 },
+            SignalPredicate {
+                signal_type: SignalType::Dummy,
+                op: CompareOp::Gte,
+                value: 1,
+            },
+            SignalPredicate {
+                signal_type: SignalType::FacePresent,
+                op: CompareOp::Eq,
+                value: 1,
+            },
         ]);
 
         // FacePresent is 0, not 1 — All fails
@@ -125,12 +143,30 @@ mod tests {
     #[test]
     fn any_passes_on_first_match() {
         let mut store = SignalStore::new();
-        store.upsert(Signal { signal_type: SignalType::Dummy, value: 0, ts_ns: 0, ttl_ns: 10_000_000_000 });
-        store.upsert(Signal { signal_type: SignalType::MotionLevel, value: 100, ts_ns: 0, ttl_ns: 10_000_000_000 });
+        store.upsert(Signal {
+            signal_type: SignalType::Dummy,
+            value: 0,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
+        store.upsert(Signal {
+            signal_type: SignalType::MotionLevel,
+            value: 100,
+            ts_ns: 0,
+            ttl_ns: 10_000_000_000,
+        });
 
         let cond = Condition::Any(vec![
-            SignalPredicate { signal_type: SignalType::Dummy,       op: CompareOp::Gte, value: 1   },
-            SignalPredicate { signal_type: SignalType::MotionLevel,  op: CompareOp::Gte, value: 50  },
+            SignalPredicate {
+                signal_type: SignalType::Dummy,
+                op: CompareOp::Gte,
+                value: 1,
+            },
+            SignalPredicate {
+                signal_type: SignalType::MotionLevel,
+                op: CompareOp::Gte,
+                value: 50,
+            },
         ]);
 
         // Dummy is 0 (fails), MotionLevel is 100 (passes) — Any passes

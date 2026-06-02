@@ -120,4 +120,7 @@ These apply across all phases:
 - **Per-detector config schemas** — currently only `busy_ns` is a detector-
   level config field.
 - **Durable metadata storage** — event records are currently ephemeral
-  (log + file). A durable store (SQLite, append-only file, obj
+  (log + file). A durable store (SQLite, append-only file, object storage)
+  is needed for audit and replay.
+- **Cross-platform reload** — SIGHUP is Unix-only; Windows needs a control
+  endpoint or file watcher.
