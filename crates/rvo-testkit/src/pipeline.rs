@@ -50,6 +50,12 @@ pub struct PipelineBuilder {
     clip_after: Duration,
 }
 
+impl Default for PipelineBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PipelineBuilder {
     pub fn new() -> Self {
         Self {

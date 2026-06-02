@@ -33,11 +33,9 @@ impl FrameBuffer {
     pub fn slice(&self, start: Instant, end: Instant) -> Vec<Frame> {
         let mut out = Vec::new();
 
-        for slot in &self.frames {
-            if let Some(f) = slot {
-                if f.ts >= start && f.ts <= end {
-                    out.push(f.clone());
-                }
+        for f in self.frames.iter().flatten() {
+            if f.ts >= start && f.ts <= end {
+                out.push(f.clone());
             }
         }
 
@@ -48,11 +46,9 @@ impl FrameBuffer {
     fn newest(&self) -> Option<&Frame> {
         let mut newest: Option<&Frame> = None;
 
-        for slot in &self.frames {
-            if let Some(f) = slot {
-                if newest.map_or(true, |n| f.ts > n.ts) {
-                    newest = Some(f);
-                }
+        for f in self.frames.iter().flatten() {
+            if newest.is_none_or(|n| f.ts > n.ts) {
+                newest = Some(f);
             }
         }
 

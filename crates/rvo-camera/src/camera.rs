@@ -70,7 +70,7 @@ pub fn start_camera(cfg: CameraConfig, tx: Sender<Frame>) {
                 consecutive_failures += 1;
 
                 // Log on first failure and every 300 afterward (~10 s at 30 fps)
-                if consecutive_failures == 1 || consecutive_failures % 300 == 0 {
+                if consecutive_failures == 1 || consecutive_failures.is_multiple_of(300) {
                     eprintln!(
                         "[CAMERA] Read failed (consecutive={})",
                         consecutive_failures

@@ -195,7 +195,7 @@ fn build_synthetic_frame(
             color_b,
             period_frames,
         } => {
-            let use_a = *period_frames == 0 || (frame_id / *period_frames) % 2 == 0;
+            let use_a = *period_frames == 0 || (frame_id / *period_frames).is_multiple_of(2);
             let (r, g, b) = if use_a { *color_a } else { *color_b };
             Mat::new_rows_cols_with_default(
                 height,

@@ -61,6 +61,12 @@ pub struct SignalStore {
     slots: Vec<SignalSlot>,
 }
 
+impl Default for SignalStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SignalStore {
     pub fn new() -> Self {
         Self {
@@ -87,7 +93,7 @@ impl SignalStore {
     pub fn get(&self, signal_type: SignalType, now_ns: u64) -> Option<Signal> {
         let slot = &self.slots[signal_type.index()];
         let v1 = slot.version.load(Ordering::Acquire);
-        if v1 % 2 != 0 {
+        if !v1.is_multiple_of(2) {
             return None;
         }
 

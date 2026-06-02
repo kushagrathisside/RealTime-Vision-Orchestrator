@@ -31,7 +31,7 @@ impl DetectorRuntime {
     }
 
     fn is_in_backoff(&self, now: Instant) -> bool {
-        self.backoff_until.map_or(false, |until| now < until)
+        self.backoff_until.is_some_and(|until| now < until)
     }
 
     fn apply_backoff(&mut self, cost: DetectorCostHint, now: Instant) {
