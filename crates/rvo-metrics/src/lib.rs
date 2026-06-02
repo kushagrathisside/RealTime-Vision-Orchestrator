@@ -11,12 +11,10 @@ pub fn start_metrics_server(port: u16) {
                 .expect("metrics server");
 
         for req in server.incoming_requests() {
-            if req.url() == "/metrics" {
-                let body = render_prometheus();
-                let _ = req.respond(Response::from_string(body));
-            } else {
-                let _ = req.respond(Response::from_string("404"));
-            }
-        }
-    });
-}
+            match req.url() {
+                "/metrics" => {
+                    let body = render_prometheus();
+                    let _ = req.respond(Response::from_string(body));
+                }
+                "/health" => {
+                    // Lightweight liveness pro

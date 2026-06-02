@@ -1,8 +1,7 @@
-use rvo_signals::store::{SignalStore, SignalType};
+use rvo_signals::store::SignalStore;
+use crate::condition::Condition;
 use crate::event::Event;
 use crate::EventDefinition;
-
-
 
 #[derive(Clone, Copy)]
 enum State {
@@ -48,27 +47,21 @@ impl EventMachine {
         now_ns: u64,
         signals: &SignalStore,
     ) -> Option<Event> {
-        // Dummy condition: signal value >= threshold
-        let condition = signals
-            .get(SignalType::Dummy, now_ns)
-            .map(|s| s.value >= self.def.signal_threshold)
-            .unwrap_or(false);
+        let condition_met = self.def.condition.evaluate(signals, now_ns);
 
         match self.state {
             State::Idle => {
-                if condition {
+                if condition_met {
                     if self.def.duration_ns == 0 {
                         return Some(self.emit_event(now_ns, now_ns));
                     } else {
-                        self.state = State::Potential {
-                            start_ns: now_ns,
-                        };
+                        self.state = State::Potential { start_ns: now_ns };
                     }
                 }
             }
 
             State::Potential { start_ns } => {
-                if !condition {
+                if !condition_met {
                     self.state = State::Idle;
                 } else if now_ns.saturating_sub(start_ns) >= self.def.duration_ns {
                     return Some(self.emit_event(now_ns, start_ns));
@@ -97,10 +90,7 @@ impl EventEngine {
 
     pub fn new_many(defs: Vec<EventDefinition>) -> Self {
         Self {
-            machines: defs
-                .into_iter()
-                .map(EventMachine::new)
-                .collect(),
+            machines: defs.into_iter().map(EventMachine::new).collect(),
         }
     }
 
@@ -119,34 +109,30 @@ impl EventEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::condition::{Condition, CompareOp, SignalPredicate};
     use crate::event::EventType;
     use rvo_signals::store::{Signal, SignalStore, SignalType};
+
+    fn dummy_signal(value: u64, ttl_ns: u64) -> Signal {
+        Signal { signal_type: SignalType::Dummy, value, ts_ns: 0, ttl_ns }
+    }
 
     #[test]
     fn event_triggers_after_duration() {
         let def = EventDefinition {
             event_type: EventType::DummyEvent,
-            signal_threshold: 1,
-            duration_ns: 1_000_000_000, // 1s
+            condition: Condition::single_gte(SignalType::Dummy, 1),
+            duration_ns: 1_000_000_000,  // 1s
             cooldown_ns: 5_000_000_000,
         };
 
         let mut engine = EventEngine::new(def);
         let mut store = SignalStore::new();
+        store.upsert(dummy_signal(1, 10_000_000_000)); // TTL 10s
 
-        // Simulate signal present
-        store.upsert(Signal {
-            signal_type: SignalType::Dummy,
-            value: 1,
-            ts_ns: 0,
-            ttl_ns: 2_000_000_000,
-        });
-
-
-        // Before duration: no event
+        // Before duration elapses: no event
         assert!(engine.update(500_000_000, &store).is_empty());
-
-        // After duration: event
+        // After duration elapses: event fires
         let events = engine.update(1_500_000_000, &store);
         assert_eq!(events.len(), 1);
     }
@@ -155,26 +141,24 @@ mod tests {
     fn cooldown_is_enforced() {
         let def = EventDefinition {
             event_type: EventType::DummyEvent,
-            signal_threshold: 1,
+            condition: Condition::single_gte(SignalType::Dummy, 1),
             duration_ns: 0,
-            cooldown_ns: 1_000_000_000,
+            cooldown_ns: 1_000_000_000, // 1s
         };
 
         let mut engine = EventEngine::new(def);
         let mut store = SignalStore::new();
-        store.upsert(Signal {
-            signal_type: SignalType::Dummy,
-            value: 1,
-            ts_ns: 0,
-            ttl_ns: 2_000_000_000,
-        });
+        store.upsert(dummy_signal(1, 10_000_000_000));
 
         let first = engine.update(0, &store);
         assert_eq!(first.len(), 1);
 
-        // Within cooldown: no event
-        let second = engine.update(500_000_000, &store);
-        assert!(second.is_empty());
+        // Still in cooldown
+        assert!(engine.update(500_000_000, &store).is_empty());
+
+        // After cooldown expires: fires again
+        let third = engine.update(1_500_000_000, &store);
+        assert_eq!(third.len(), 1);
     }
 
     #[test]
@@ -182,13 +166,13 @@ mod tests {
         let defs = vec![
             EventDefinition {
                 event_type: EventType::DummyEvent,
-                signal_threshold: 1,
+                condition: Condition::single_gte(SignalType::Dummy, 1),
                 duration_ns: 0,
                 cooldown_ns: 1_000_000_000,
             },
             EventDefinition {
                 event_type: EventType::DummyEvent,
-                signal_threshold: 1,
+                condition: Condition::single_gte(SignalType::Dummy, 1),
                 duration_ns: 0,
                 cooldown_ns: 1_000_000_000,
             },
@@ -196,21 +180,15 @@ mod tests {
 
         let mut engine = EventEngine::new_many(defs);
         let mut store = SignalStore::new();
-        store.upsert(Signal {
-            signal_type: SignalType::Dummy,
-            value: 1,
-            ts_ns: 0,
-            ttl_ns: 2_000_000_000,
-        });
+        store.upsert(dummy_signal(1, 10_000_000_000));
 
-        let events = engine.update(0, &store);
-
-        assert_eq!(events.len(), 2);
+        // Both machines should fire independently
+        assert_eq!(engine.update(0, &store).len(), 2);
     }
-}
-// Event Engine Tests
-/* What this proves:
-1. Temporal logic works
-2. No dependency on frames
-3. Deterministic behavior
-*/
+
+    #[test]
+    fn all_condition_requires_every_signal() {
+        let def = EventDefinition {
+            event_type: EventType::DummyEvent,
+            condition: Condition::All(vec![
+                SignalPredicate { signal_type: SignalType::Dum

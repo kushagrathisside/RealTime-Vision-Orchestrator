@@ -1,228 +1,141 @@
 # Architecture
 
-This document describes the intended RVO architecture. Some parts already exist
-in the current Rust MVP, while others are platform goals.
+This document describes the RVO architecture. The core design is implemented
+in the current codebase. Platform-level extensions are noted where applicable.
 
-## System View
-
-RVO is built around a simple realtime invariant:
+## System Invariant
 
 > The live path must never wait for slow work.
 
-The live path includes camera ingestion, frame freshness, detector scheduling,
-signal publication, and event evaluation. Slow work such as encoding, disk IO,
-uploads, and external consumers belongs off the live path.
+The live path: camera ingestion → frame buffer → scheduler → detector execution
+→ signal publication → event evaluation. Everything else (encoding, file I/O,
+downstream delivery) is off the live path.
 
-## End-to-End Flow
+## End-to-End Data Flow
 
-```text
-Camera / Stream
+```
+Camera / RTSP Stream
     |
-    v
-Bounded Frame Channel
+    v  (bounded channel, capacity 5 — drops on full)
+Scheduler.tick()
     |
-    v
-Rolling Frame Buffer
+    +--→ FrameBuffer  (Arc<Mutex<>>, circular, capacity 300)
     |
-    v
-Scheduler
-    |
-    +--> DetectorNode(s)
+    +--→ DetectorNode(s)
     |        |
     |        v
-    |   SignalStore
+    |    SignalStore  (typed slots, TTL freshness)
     |
-    v
-EventEngine
+    +--→ EventEngine
+    |        |  (Condition DSL: All/Any over SignalPredicates)
+    |        v
+    |    Vec<Event>
     |
-    v
-ClipManager / Event Publisher
+    +--→ EventPublisher  (try_send — drops on full)
+    |        |
+    |        +--→ stdout logger
+    |        +--→ JSON-lines file sink  (optional)
     |
-    v
-Async Workers / Storage / Downstream Apps
+    +--→ ClipManager  (spawns post-roll thread — non-blocking)
+              |
+              v  (bounded queue, capacity 8 — drops on full)
+         Encoder Worker
+              |
+              v
+         clips/{type}_{ts}/frame_NNNN.jpg + meta.json
 ```
 
-## Runtime Components
+## Bounded Everything
 
-### Frame Bus
+Every handoff in the system uses a bounded structure:
 
-The frame bus accepts live frames and keeps the latest data moving. It should be
-bounded, lossy under pressure, and optimized for freshness.
+| Handoff | Bound | Overflow behavior |
+|---|---|---|
+| Camera → Scheduler | Channel cap 5 | Drop frame, count `rvo_frame_drops_total` |
+| Scheduler → Encoder | Channel cap 8 | Drop clip job, count `rvo_clip_drops_total` |
+| Scheduler → EventPublisher | Channel cap 64 | Drop event, count `rvo_event_drops_total` |
+| FrameBuffer | 300 frames (~10 s @ 30 fps) | Overwrite oldest |
 
-Core rule:
+No unbounded queue exists anywhere in the live path.
 
-> A fresh frame is usually more valuable than an old frame processed late.
+## Frame Buffer Sharing
 
-### Scheduler
+The frame buffer is the only state shared between the live path and the
+evidence pipeline. It uses `Arc<Mutex<FrameBuffer>>`:
 
-The scheduler is a clock-driven arbiter. It decides which detector nodes are
-allowed to run now.
+- **Scheduler** holds a clone of the Arc. During each tick, it locks briefly
+  to drain frames and snapshot the newest frame, then releases.
+- **ClipManager** holds a clone of the Arc. When an event fires, it spawns a
+  thread that sleeps for the post-roll duration, then locks briefly to slice
+  frames, then releases. This thread never holds the lock while sleeping.
 
-It should consider:
+The lock is never held across a blocking operation, so the scheduler tick and
+post-roll threads contend only on brief read/write windows.
 
-- detector FPS caps
-- dependency freshness
-- frame availability
-- model cost hints
-- current load
-- detector health
+## Scheduler And DetectorNode Contract
 
-It should not create a backlog of missed detector executions.
+The scheduler is a clock-driven arbiter. It decides when each detector may run.
 
-### DetectorNode
+Scheduler responsibilities:
+- enforce FPS caps
+- check signal dependency freshness
+- apply load-shedding backoff
+- measure execution latency
+- handle Failed health
 
-A detector node is a time-governed signal producer.
+DetectorNode responsibilities:
+- consume the provided context (timestamp, optional frame, signal store)
+- produce typed signals and a health status
+- not own scheduling, I/O, or downstream delivery
 
-It should not own scheduling, disk IO, or downstream delivery. Its job is to
-consume the context made available by the runtime and produce bounded outputs.
+Neither touches the other's domain.
 
-Conceptual interface:
+## Signal Store
 
-```text
-DetectorNode
-  id
-  metadata
-  init(config)
-  execute(context) -> result
-  shutdown()
+The signal store is a typed blackboard, not a queue. It answers:
+
+> What is the latest valid value of signal X right now?
+
+One slot per `SignalType`. Reads and writes are O(1). A seqlock-style version
+counter guards the read side. Freshness is enforced via TTL at read time.
+
+If a signal is missing or stale, it is treated as absent — the scheduler will
+skip dependent detectors, and predicates that reference it will evaluate false.
+
+## Condition DSL
+
+Event conditions are defined as a tree of signal predicates:
+
+```
+Condition
+  ├── All(predicates)    →  AND semantics
+  └── Any(predicates)    →  OR semantics
+
+SignalPredicate
+  ├── signal_type: SignalType
+  ├── op: CompareOp (Gte | Gt | Eq | Lt | Lte)
+  └── value: u64
 ```
 
-Conceptual metadata:
+This replaces the original single `signal >= threshold` condition. Each
+`EventMachine` evaluates its own `Condition` independently per tick.
 
-```text
-DetectorMeta {
-  id
-  max_fps
-  dependencies
-  output_signals
-  cost_hint
-  enabled
-}
+## Event Engine
+
+Temporal state machine per event definition:
+
+```
+Idle → (condition first true) → Potential { start_ns }
+     → (condition still true, elapsed >= duration_ns) → emit Event
+     → Cooldown { until_ns }
+     → (now >= until_ns) → Idle
+     
+     (condition becomes false while Potential) → back to Idle
 ```
 
-Conceptual execution context:
+Event emission is separate from evidence capture. An event is meaningful even
+if clip extraction fails or is dropped.
 
-```text
-DetectorContext {
-  now_ts
-  frame
-  signals
-}
-```
+## Evidence Pipeline
 
-### Signal Store
-
-The signal store is a realtime blackboard.
-
-It should answer:
-
-> What is the latest valid signal of type X right now?
-
-It is not a queue, event log, or pub-sub system. It should store the latest
-signal per type and use TTLs to prevent stale dependency usage.
-
-Conceptual signal:
-
-```text
-Signal {
-  type
-  value
-  ts
-  ttl
-}
-```
-
-Freshness rule:
-
-```text
-signal.ts + signal.ttl >= now
-```
-
-If a signal is missing or stale, it should be treated as absent.
-
-### Event Engine
-
-The event engine converts signal conditions into temporal events.
-
-It should not read frames, run models, write files, or call external systems.
-It should evaluate conditions over fresh signals and update small state
-machines.
-
-Conceptual event states:
-
-```text
-Idle -> Potential -> Confirmed -> Cooldown -> Idle
-```
-
-The current implementation uses `Idle`, `Potential`, and `Cooldown`, with event
-emission happening at the transition into cooldown.
-
-### Evidence Pipeline
-
-The evidence pipeline turns events into optional artifacts such as clips,
-thumbnails, metadata files, or downstream messages.
-
-This pipeline is best-effort:
-
-- bounded queues
-- async workers
-- drop-on-overload
-- no backpressure into the live path
-
-Events should remain meaningful even if evidence extraction fails.
-
-### Observability
-
-RVO should expose enough metrics to prove that realtime behavior is preserved.
-
-Important metric families:
-
-- capture FPS and frame drops
-- scheduler tick rate
-- detector executions, skips, and latency
-- signal freshness and missing dependencies
-- event counts and event latency
-- clip jobs accepted, dropped, and encoded
-- queue depths and overload state
-
-## Design Boundaries
-
-RVO is not:
-
-- a computer vision model
-- a model training framework
-- a general-purpose distributed compute engine
-- a video codec
-- a durable event log
-
-RVO is:
-
-- a realtime orchestration layer
-- a bounded message path for frames and signals
-- a scheduler for video AI models
-- a temporal event engine
-- a best-effort evidence pipeline
-
-## Distributed System Direction
-
-The current code runs as one process. The architecture should allow future
-modules to move across process or machine boundaries.
-
-Natural boundaries:
-
-- stream ingest
-- scheduler runtime
-- detector workers
-- event publisher
-- clip encoder
-- artifact storage
-- metrics collection
-
-The key is to preserve the same contracts:
-
-- bounded queues
-- freshness over completeness
-- typed signals
-- temporal event semantics
-- no slow work on the live path
-
+The evidence pipeline is explicitly best-

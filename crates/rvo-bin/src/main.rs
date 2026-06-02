@@ -12,9 +12,19 @@ use rvo_detector::load::LoadDetector;
 use rvo_detector::jitter::JitterDetector;
 
 use rvo_config::{try_load_config, RvoConfig};
-use rvo_events::{EventEngine, EventDefinition, EventType};
+use rvo_events::{
+    start_event_logger,
+    start_event_file_sink,
+    Condition,
+    EventEngine,
+    EventPublisher,
+    EventDefinition,
+    EventType,
+};
+use rvo_signals::store::SignalType;
+use rvo_buffer::FrameBuffer;
 
-use rvo_camera::{start_camera, CameraConfig};
+use rvo_camera::{start_camera, CameraConfig, CameraSource};
 use rvo_clips::{ClipManager, start_encoder_worker};
 
 /// ---------------- detector factory ----------------
@@ -53,9 +63,18 @@ fn build_event_engine(cfg: &RvoConfig) -> Result<EventEngine, String> {
             other => return Err(format!("Unknown event type: {}", other)),
         };
 
+        // Validated by RvoConfig::validate — safe to unwrap the match.
+        let signal_type = match e.signal_type.as_str() {
+            "Dummy"          => SignalType::Dummy,
+            "MotionLevel"    => SignalType::MotionLevel,
+            "FacePresent"    => SignalType::FacePresent,
+            "PersonDetected" => SignalType::PersonDetected,
+            other => return Err(format!("Unknown signal_type: {}", other)),
+        };
+
         defs.push(EventDefinition {
             event_type,
-            signal_threshold: e.signal_threshold,
+            condition: Condition::single_gte(signal_type, e.signal_threshold),
             duration_ns: e.duration_ms * 1_000_000,
             cooldown_ns: e.cooldown_ms * 1_000_000,
         });
@@ -68,9 +87,8 @@ fn build_runtime_config(
     path: &str,
 ) -> Result<(Vec<Box<dyn DetectorNode>>, EventEngine), String> {
     let cfg = try_load_config(path)?;
-    let detectors = build_detectors(&cfg)?;
+    let detectors    = build_detectors(&cfg)?;
     let event_engine = build_event_engine(&cfg)?;
-
     Ok((detectors, event_engine))
 }
 
@@ -83,13 +101,12 @@ fn reload_scheduler(
     let mut sched = scheduler
         .lock()
         .map_err(|_| "Scheduler lock poisoned".to_string())?;
-
     sched.swap_runtime(detectors, event_engine);
     Ok(())
 }
 
 #[cfg(unix)]
-fn spawn_reload_thread(scheduler: Arc<Mutex<Scheduler>>) {
+fn spawn_reload_thread(scheduler: Arc<Mutex<Scheduler>>, config_path: String) {
     use signal_hook::consts::SIGHUP;
     use signal_hook::iterator::Signals;
 
@@ -97,9 +114,9 @@ fn spawn_reload_thread(scheduler: Arc<Mutex<Scheduler>>) {
         let mut signals = Signals::new([SIGHUP]).expect("signals");
 
         for _ in signals.forever() {
-            println!("[RVO] SIGHUP received, reloading config");
+            println!("[RVO] SIGHUP — reloading config from {}", config_path);
 
-            match reload_scheduler(&scheduler, "config/rvo.yaml") {
+            match reload_scheduler(&scheduler, &config_path) {
                 Ok(()) => println!("[RVO] Reload complete"),
                 Err(err) => eprintln!("[RVO] Reload failed: {}", err),
             }
@@ -108,44 +125,25 @@ fn spawn_reload_thread(scheduler: Arc<Mutex<Scheduler>>) {
 }
 
 #[cfg(not(unix))]
-fn spawn_reload_thread(_scheduler: Arc<Mutex<Scheduler>>) {
+fn spawn_reload_thread(_scheduler: Arc<Mutex<Scheduler>>, _config_path: String) {
     println!("[RVO] SIGHUP config reload disabled on this platform");
 }
 
 fn main() {
+    // ---------------- config path ----------------
+    let config_path = std::env::var("RVO_CONFIG")
+        .unwrap_or_else(|_| "config/rvo.yaml".to_string());
+
     // ---------------- metrics ----------------
     start_metrics_server(9090);
 
     // ---------------- initial config ----------------
-    let (detectors, event_engine) =
-        build_runtime_config("config/rvo.yaml").expect("initial config");
+    let cfg          = try_load_config(&config_path).expect("initial config");
+    let detectors    = build_detectors(&cfg).expect("build detectors");
+    let event_engine = build_event_engine(&cfg).expect("build event engine");
+
+    // ---------------- frame buffer ----------------
+    let frame_buffer = Arc::new(Mutex::new(FrameBuffer::new(300))); // ~10s @ 30fps
 
     // ---------------- camera ----------------
-    let (frame_tx, frame_rx) = bounded(5);
-    start_camera(CameraConfig { device_index: 0 }, frame_tx);
-
-    // ---------------- clips ----------------
-    let (clip_tx, clip_rx) = bounded(8);
-    start_encoder_worker(clip_rx);
-
-    let clip_manager = ClipManager::new(
-        clip_tx,
-        Duration::from_secs(3),
-        Duration::from_secs(2),
-    );
-
-    // ---------------- scheduler ----------------
-    let scheduler = Arc::new(Mutex::new(
-        Scheduler::new(detectors, event_engine, frame_rx, clip_manager),
-    ));
-
-    println!("[RVO] Started (camera + clips)");
-
-    spawn_reload_thread(Arc::clone(&scheduler));
-
-    // ---------------- main loop ----------------
-    loop {
-        scheduler.lock().unwrap().tick();
-        thread::sleep(Duration::from_millis(1));
-    }
-}
+    let camera_source = if let 

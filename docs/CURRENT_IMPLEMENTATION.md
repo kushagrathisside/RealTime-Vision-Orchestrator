@@ -1,277 +1,210 @@
 # Current Implementation
 
-This document describes what the current Rust code does today. It is separate
-from the broader RVO product vision so the implementation status stays clear.
+This document describes what the current Rust code does. It is kept separate
+from the product vision so implementation status stays unambiguous.
 
 ## Repository Shape
 
-The project is a Rust workspace with multiple crates under `crates/`.
+Rust workspace with eleven crates under `crates/`. All are listed as workspace
+members so `cargo test --workspace` covers every crate.
 
-Current top-level crates and responsibilities:
-
-- `rvo-bin`: application entrypoint and runtime wiring
-- `rvo-config`: YAML configuration loading and validation
-- `rvo-camera`: OpenCV camera capture and mock camera helper
-- `rvo-buffer`: bounded frame buffer
-- `rvo-detector`: detector trait and synthetic detectors
-- `rvo-signals`: signal storage
-- `rvo-events`: temporal event engine
-- `rvo-scheduler`: main orchestration loop
-- `rvo-clips`: clip job creation and simulated encoder worker
-- `rvo-metrics`: metrics counters and HTTP endpoint
-- `rvo-core`: small shared time helper
-
-Note: the root `Cargo.toml` currently lists only a subset of these crates as
-workspace members, while other crates are pulled in through path dependencies.
+| Crate | Responsibility |
+|---|---|
+| `rvo-bin` | Entrypoint, runtime wiring, SIGHUP reload |
+| `rvo-config` | YAML config loading and validation |
+| `rvo-camera` | OpenCV capture, mock camera, RTSP/URI source |
+| `rvo-buffer` | Bounded circular frame buffer |
+| `rvo-detector` | Detector trait, synthetic detectors |
+| `rvo-signals` | Typed signal store |
+| `rvo-events` | Condition DSL, temporal event engine, publishers |
+| `rvo-scheduler` | Orchestration loop, load shedding |
+| `rvo-clips` | Clip job pipeline, JPEG encoder, JSON metadata |
+| `rvo-metrics` | Prometheus-style counters, HTTP endpoints |
+| `rvo-core` | Shared time helper, reserved frame module |
 
 ## Entrypoint
 
-The process starts in `crates/rvo-bin/src/main.rs`.
+`crates/rvo-bin/src/main.rs`. Startup order:
 
-Startup flow:
-
-1. Start the metrics server on `127.0.0.1:9090`.
-2. Load `config/rvo.yaml`.
-3. Build detector nodes from config.
-4. Build the event engine from config.
-5. Start the OpenCV camera thread.
-6. Start the clip encoder worker thread.
-7. Create the scheduler.
-8. Start a SIGHUP reload thread.
-9. Enter the scheduler tick loop.
-
-The main loop calls `scheduler.tick()` and sleeps for 1 ms.
+1. Read config path from `RVO_CONFIG` env var (default: `config/rvo.yaml`).
+2. Start metrics server on `127.0.0.1:9090`.
+3. Load and validate config.
+4. Create the shared `Arc<Mutex<FrameBuffer>>`.
+5. Build detectors and event engine from config.
+6. Start camera thread.
+7. Start clip encoder worker thread.
+8. Optionally start event file sink if `event_log` is set in config.
+9. Build scheduler (receives the shared frame buffer).
+10. Spawn SIGHUP reload thread (Unix only; no-op on Windows).
+11. Enter the 1 ms tick loop.
 
 ## Configuration
 
-The active config is `config/rvo.yaml`.
+Active config: `config/rvo.yaml`.
 
-Current detector types:
+Top-level fields:
 
-- `dummy`: emits a simple signal
-- `load`: burns CPU for a configured number of nanoseconds
-- `jitter`: burns a random amount of CPU time, currently disabled in config
+- `camera`: source definition (`device_index` or `source_uri`).
+- `detectors`: list of detector definitions.
+- `events`: list of event definitions.
+- `clips_dir`: output directory for evidence clips (default: `clips/`).
+- `event_log`: optional path for JSON-lines event output (e.g. `events.jsonl`).
 
-Current event support:
+Detector kinds: `dummy`, `load`, `jitter`.
 
-- `DummyEvent`
-
-The config format allows multiple events, but the current binary uses only the
-first event definition with `cfg.events[0]`.
+Event `condition` block supports `all` and `any` predicates. The shorthand
+`signal_type` + `signal_threshold` fields expand to a single `gte` predicate.
 
 ## Camera Path
 
-`rvo-camera` starts a camera thread using OpenCV `VideoCapture`.
+`rvo-camera` opens a `VideoCapture` from either a device index (integer) or a
+URI string (RTSP, file path, HTTP stream).
 
-For every successful camera read:
+For every successful read:
+1. Create `Frame { ts: Instant, id: u64, image: Mat }`.
+2. `try_send` through a bounded channel (capacity 5).
+3. On full channel: increment `METRICS.frame_drops` and discard.
 
-1. A `Frame` is created with:
-   - `Instant` timestamp
-   - incrementing frame id
-   - OpenCV `Mat`
-2. The frame is sent through a bounded channel with `try_send`.
-3. If the channel is full, the frame is dropped.
-
-This keeps camera capture from blocking on the scheduler.
+Camera failures are logged with a consecutive-failure counter to avoid log
+spam. The thread does not panic on open or read failure.
 
 ## Frame Buffer
 
-`rvo-buffer` stores recent frames in a fixed-size buffer.
+`rvo-buffer` holds a fixed-capacity circular buffer of `Frame`.
 
-Important behavior:
+- `push(frame)` overwrites the oldest slot (O(1), no allocation).
+- `slice(start, end)` returns timestamp-sorted frames in the window.
+- `newest_frame()` / `newest_instant()` return `Option` (safe on empty buffer).
 
-- `push(frame)` overwrites the next slot.
-- `slice(start, end)` scans the buffer and clones frames whose timestamps are
-  inside the requested window.
-- `newest_instant()` returns the newest frame timestamp and panics if the buffer
-  is empty.
-
-The scheduler creates the frame buffer with capacity `300`, intended to be
-about 10 seconds at 30 FPS.
+The buffer is wrapped in `Arc<Mutex<FrameBuffer>>` and shared between the
+Scheduler (writes, tick-driven) and ClipManager (post-roll reads from spawned
+threads). The lock is held only for the brief push/read operations, so
+contention between the scheduler tick and post-roll threads is minimal.
 
 ## Detector Model
 
-The current detector interface is:
-
 ```rust
 pub trait DetectorNode: Send {
-    fn id(&self) -> &'static str;
-    fn max_fps(&self) -> f64;
-    fn execute(&mut self, ctx: &DetectorContext) -> DetectorResult;
+    fn meta(&self) -> DetectorMeta;
+    fn execute(&mut self, ctx: &DetectorContext<'_>) -> DetectorResult;
+    // id(), max_fps(), dependencies(), output_signals(), cost_hint(),
+    // requires_frame() all delegate to meta()
 }
 ```
 
-Current `DetectorContext` contains only:
+`DetectorContext` carries `now_ns: u64` and `frame: Option<&Frame>`.
 
-```rust
-pub struct DetectorContext {
-    pub now_ns: u64,
-}
-```
+`DetectorMeta` declares: `id`, `max_fps`, `dependencies: &'static [SignalType]`,
+`output_signals: &'static [SignalType]`, `cost_hint`, `requires_frame`.
 
-Current detectors:
-
-- `DummyDetector`: runs at up to 30 FPS and emits one signal with value `1`.
-- `LoadDetector`: runs at up to 10 FPS and busy-spins for `busy_ns`.
-- `JitterDetector`: runs at up to 30 FPS and busy-spins for a random duration.
-
-The current detector interface does not yet include:
-
-- declared dependencies
-- cost hints
-- frame handles
-- signal snapshots
-- lifecycle hooks
-- per-detector configuration objects
+Synthetic detectors:
+- `DummyDetector`: 30 FPS, no frame, emits `SignalType::Dummy = 1` with 1s TTL.
+- `LoadDetector`: 10 FPS, no frame, busy-spins for `busy_ns`, emits nothing.
+- `JitterDetector`: 30 FPS, no frame, busy-spins for random ≤ 2 ms.
 
 ## Scheduler
 
-`rvo-scheduler` is the current orchestration core.
+`rvo-scheduler` is the central orchestration loop.
 
 Each `tick()`:
 
-1. Drains all available frames from the camera channel into the frame buffer.
-2. Increments the scheduler tick metric.
-3. For each detector:
-   - checks whether enough time has elapsed since the detector last ran
-   - skips the detector if the FPS cap has not elapsed
-   - executes the detector otherwise
-   - stores produced signals
-4. Updates the event engine.
-5. If an event is produced, passes it to the clip manager.
+1. Drain all pending frames from the camera channel into the frame buffer.
+2. Increment `rvo_scheduler_ticks`.
+3. Snapshot `latest_frame` (holds the newest frame timestamp for dependency checks).
+4. For each detector, evaluate in order:
+   - Disabled? (set by `DetectorHealth::Failed`)
+   - FPS cap elapsed?
+   - Load-shedding backoff active?
+   - Frame required but buffer empty?
+   - All declared signal dependencies fresh?
+5. Execute, measure elapsed nanoseconds, store produced signals.
+6. On `Failed` health: disable detector permanently until reload.
+7. For each event emitted by the event engine: publish, trigger clip job.
 
-Execution guarantees currently present:
+### Load Shedding
 
-- detectors do not run concurrently inside the scheduler
-- detector execution is capped by `max_fps`
-- skipped detector executions are not queued
-- frames are drained without blocking
+When a detector's last execution time exceeds 2× its FPS-budget interval,
+a backoff period is applied based on cost hint:
 
-Execution guarantees not yet implemented:
+- `Low`: no backoff — always allowed to recover.
+- `Medium`: 100 ms backoff.
+- `High`: 500 ms backoff.
 
-- dependency freshness gating
-- load shedding by cost
-- disabling failed detectors
-- detector timeout enforcement
-- per-detector health policy
+During backoff the detector is skipped. The scheduler does not accumulate a
+queue of missed executions. This keeps the live path from falling behind when
+a model runs slow.
 
 ## Signal Store
 
-`rvo-signals` currently implements a single-slot signal store.
+`rvo-signals` stores one slot per `SignalType` in a fixed `Vec<SignalSlot>`.
 
-The implementation uses a version counter around writes, similar to a seqlock:
+Types: `Dummy`, `MotionLevel`, `FacePresent`, `PersonDetected`.
 
-1. Increment version before writing.
-2. Write the signal.
-3. Increment version after writing.
+Each slot uses a seqlock-style version counter. `upsert` takes `&mut self`
+so writes are already serialised by the borrow checker; the version check is
+defensive for a future move to concurrent writes.
 
-Reads check the version before and after reading. If the version is odd or
-changes during the read, the signal is treated as absent.
+Freshness rule: `signal.ts_ns + signal.ttl_ns < now_ns` → signal is absent.
 
-The current store supports:
+## Condition DSL
 
-- one latest signal slot
-- overwrite behavior
-- TTL-based freshness checks
+`rvo-events` exposes a composable condition type:
 
-It does not yet support:
+```rust
+pub enum CompareOp { Gte, Gt, Eq, Lt, Lte }
 
-- a fixed map of signal slots by `SignalType`
-- multiple signal types
-- explicit snapshot views
-- true multi-detector signal routing
+pub struct SignalPredicate {
+    pub signal_type: SignalType,
+    pub op: CompareOp,
+    pub value: u64,
+}
+
+pub enum Condition {
+    All(Vec<SignalPredicate>),   // all predicates must hold (AND)
+    Any(Vec<SignalPredicate>),   // any predicate must hold (OR)
+}
+```
+
+`Condition::single_gte(signal_type, value)` is the shorthand for the common
+single-signal greater-than-or-equal case.
+
+A missing or stale signal evaluates to `false` for any predicate that reads it.
 
 ## Event Engine
 
-`rvo-events` converts signal state into events.
+One `EventMachine` per `EventDefinition`. State machine:
 
-The current event engine is a single temporal state machine with states:
-
-- `Idle`
-- `Potential`
-- `Cooldown`
-
-Current condition:
-
-```text
-latest signal value >= configured signal_threshold
+```
+Idle → (condition true) → Potential { start_ns }
+     → (duration elapsed) → emit Event + Cooldown { until_ns }
+     → (cooldown elapsed) → Idle
 ```
 
-If the condition remains true for `duration_ns`, the engine emits one event and
-enters cooldown for `cooldown_ns`.
+`EventDefinition`: `event_type`, `condition: Condition`, `duration_ns`, `cooldown_ns`.
 
-Current limitations:
+`EventEngine::update()` returns `Vec<Event>`. The scheduler iterates and for
+each event: increments `rvo_events_emitted_total`, calls `EventPublisher`,
+calls `ClipManager`.
 
-- only one event definition is active
-- only one hardcoded signal condition exists
-- no event DSL exists yet
-- no event metadata exists yet
-- update returns `Option<Event>`, not a list of events
+## Evidence Pipeline
 
-## Clip Path
+`ClipManager::on_event`:
 
-`rvo-clips` currently creates best-effort clip jobs when an event fires.
+1. Lock buffer, read `newest_instant()` → None: drop, count `rvo_clip_drops_total`.
+2. Compute clip window `[event_ts − before, event_ts + after]`.
+3. Spawn a thread: sleep `after`, then lock buffer, slice frames, `try_send` to encoder.
+4. On full encoder queue: count `rvo_clip_drops_total`.
 
-Current flow:
+Encoder worker:
 
-1. `ClipManager::on_event` finds the newest frame timestamp.
-2. It computes a time window using configured `before` and `after` durations.
-3. It slices frames from the current frame buffer.
-4. It sends `(ClipJob, Vec<Frame>)` to a bounded encoder queue.
-5. The encoder worker prints a message and sleeps for 200 ms.
+1. Create `{clips_dir}/{EventType}_{ts_ns}/` directory.
+2. Write each frame as `frame_NNNN.jpg` via `opencv::imgcodecs::imwrite`.
+3. Write `meta.json`: event type, timestamp ns, frame count, written count,
+   per-frame timestamp array, clip window, encoding latency ms.
 
-This proves the asynchronous shape of the evidence pipeline, but it does not
-yet write video files.
+## Event Publishers
 
-Important limitation: post-event frames are not really captured yet. The clip
-manager computes `event_ts + after`, but immediately slices the current buffer,
-so future frames are not available at that moment.
+**Channel logger** (`start_event_logger`): always active; logs to stdout.
 
-## Metrics
-
-`rvo-metrics` exposes a Prometheus-style endpoint at:
-
-```text
-http://127.0.0.1:9090/metrics
-```
-
-Current counters:
-
-- `rvo_scheduler_ticks`
-- `rvo_detector_exec_total`
-- `rvo_detector_skip_total`
-- `rvo_events_emitted_total`
-
-Current limitation: `rvo_events_emitted_total` exists but is not incremented in
-the scheduler today.
-
-## Hot Reload
-
-The binary listens for `SIGHUP`.
-
-On reload:
-
-1. Reload `config/rvo.yaml`.
-2. Rebuild detectors.
-3. Rebuild the event engine.
-4. Swap the scheduler runtime.
-
-This supports runtime detector and event config changes without restarting the
-process.
-
-## Known Correctness Issue
-
-The scheduler currently computes `now_ns` like this:
-
-```rust
-let now = Instant::now();
-let now_ns = now.elapsed().as_nanos() as u64;
-```
-
-Because `now` was just created, `now.elapsed()` is nearly zero every tick. The
-event engine expects a monotonic timestamp that advances across ticks, so this
-should be replaced with a stable monotonic origin or a shared time source.
-
-This is the most important issue to fix before relying on event duration or
-cooldown behavior.
-
+**File sink** (`start_event_file_sink`): active when `event_log` is set.
+Appends one JSON line per event to the 

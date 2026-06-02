@@ -1,207 +1,123 @@
 # Roadmap
 
-This roadmap turns the current MVP into the broader RVO platform: a realtime
-video AI orchestration runtime for low-latency applications.
-
-For the concrete current-code triage list, see
+This roadmap turns the current codebase into the broader RVO platform.
+For concrete open issues in the current code, see
 [Issues And Leftovers](ISSUES_AND_LEFTOVERS.md).
 
-## Phase 1: Correctness And Core Runtime
+## Phase 1: Correctness And Core Runtime — COMPLETE
 
-Priority fixes:
+All items in this phase are resolved:
 
-- Replace scheduler `now_ns` with a stable monotonic timestamp.
-- Increment `rvo_events_emitted_total` when events are emitted.
-- Add all path dependency crates to the workspace members list.
-- Make event duration and cooldown tests match real scheduler time behavior.
-- Decide whether signal TTL stores a duration or an absolute expiry timestamp.
+- Scheduler monotonic time (stable `started_at` origin).
+- Signal TTL semantics normalised (duration, not absolute expiry).
+- Event duration and cooldown tests correct.
+- Zero-duration events handled (confidence = 1.0, no divide-by-zero).
+- Config reload non-fatal (preserves live runtime on error).
+- Clip manager safe on empty frame buffer.
+- Events metric incremented on emit.
+- Frame buffer slice chronologically ordered.
+- All crates in workspace.
+- SIGHUP reload Unix-only with platform guard.
 
-Core hardening:
+## Phase 2: Real Detector Runtime Contract — COMPLETE
 
-- Avoid panicking when clip manager sees an empty frame buffer.
-- Add focused tests for scheduler event triggering.
-- Add tests for frame buffer slicing and clip job windows.
-- Add tests for config reload behavior where possible.
+- `DetectorNode::meta()` exposes id, max_fps, dependencies, output signals,
+  cost hint, frame requirement.
+- `DetectorContext` carries `frame: Option<&Frame>`.
+- Scheduler gates on frame availability and signal dependency freshness.
+- `DetectorHealth::Failed` disables detectors.
+- Aggregate execution latency tracked.
 
-## Phase 2: Real Detector Runtime Contract
+## Phase 3: Multi-Signal Store — COMPLETE
 
-Extend `DetectorNode` from the current MVP interface into a production contract.
+- `SignalType` has typed slots: `Dummy`, `MotionLevel`, `FacePresent`,
+  `PersonDetected`.
+- O(1) read and write by type index.
+- TTL freshness check per slot.
+- Seqlock-style version counter guards concurrent read safety.
 
-Add detector metadata:
+## Phase 4: Condition DSL And Event Definitions — IN PROGRESS
 
-- unique id
-- max FPS
-- required signal dependencies
-- produced signal types
-- optional frame requirement
-- cost hint
-- enabled flag
+Completed:
+- `Condition` type: `All(Vec<SignalPredicate>)` and `Any(Vec<SignalPredicate>)`.
+- `CompareOp`: Gte, Gt, Eq, Lt, Lte.
+- Multiple `EventDefinition`s update independently.
+- `EventEngine::update()` returns `Vec<Event>`.
+- `Condition::single_gte()` shorthand for backward compat.
 
-Extend `DetectorContext`:
+Remaining:
+- Config YAML `condition:` block parsing (currently only `signal_type` +
+  `signal_threshold` shorthand is parsed from YAML; the DSL types exist
+  programmatically and can be used by embedders).
+- Additional `EventType` variants beyond `DummyEvent`.
+- Event confidence model beyond simple elapsed/duration ratio.
+- Event IDs and session correlation.
 
-- monotonic timestamp
-- optional latest frame handle
-- read-only signal view
-- runtime config reference if needed
+## Phase 5: Real Evidence Pipeline — IN PROGRESS
 
-Extend detector results:
+Completed:
+- Post-roll capture via `Arc<Mutex<FrameBuffer>>` shared with `ClipManager`.
+- Spawned post-roll thread waits `after` duration before slicing buffer.
+- JPEG frame output via `opencv::imgcodecs::imwrite`.
+- `meta.json` sidecar per clip.
+- Clip drop metric.
 
-- produced signals
-- health status
-- execution diagnostics
-- optional model metadata
+Remaining:
+- Video muxing (MP4/MKV via GStreamer or ffmpeg-sys).
+- Frame drop accounting within a clip (detect gaps in the slice).
+- Encoder latency metric.
+- Post-roll accuracy beyond 10 s (buffer size vs. post-roll window).
+- Thumbnail extraction.
 
-Runtime policies:
+## Phase 6: External Interfaces — IN PROGRESS
 
-- no concurrent execution for the same detector
-- no catch-up executions
-- skip stale dependencies
-- disable or degrade failed detectors
-- emit per-detector metrics
+Completed:
+- JSON-lines file sink (`start_event_file_sink`).
+- `/health` endpoint.
+- `RVO_CONFIG` env var for config path.
+- RTSP/URI camera source.
+- Drop metrics at every bounded queue.
 
-## Phase 3: Multi-Signal Store
+Remaining:
+- Local IPC or Unix socket event push.
+- HTTP pull endpoint for latest events.
+- Control API: enable/disable detectors, adjust FPS, trigger reload.
+- Graceful shutdown (drain clips, flush event log, join threads).
+- `/ready` endpoint (camera alive, scheduler alive, not just process alive).
 
-Move from the current single-slot signal store to a fixed signal map.
+## Phase 7: Load Shedding And Scheduling Policy — IN PROGRESS
 
-Target behavior:
+Completed:
+- Per-detector cost-aware backoff on overrun (Medium: 100 ms, High: 500 ms).
+- `rvo_detector_skip_total` counts backoff skips.
 
-- one slot per signal type
-- overwrite by signal type
-- O(1) read and write
-- no hot-path allocation
-- TTL freshness checks
-- read-only snapshots for detectors and event engine
+Remaining:
+- Per-detector execution latency histograms (not just aggregate).
+- Queue pressure as a shedding input (clip queue depth, event queue depth).
+- Explicit FPS reduction for degraded-but-not-failed detectors.
+- Overload state metric visible in `/metrics`.
 
-Example signal types:
+## Phase 8: Multi-Stream And Distributed Runtime — NOT STARTED
 
-- `MOTION_LEVEL`
-- `FACE_PRESENT`
-- `PERSON_DETECTED`
-- `POSE_KEYPOINTS`
-- `OBJECT_DETECTED`
-- `OCR_TEXT`
-- `ANOMALY_SCORE`
+- Multiple camera or RTSP sources with per-stream scheduler instances.
+- Detector worker pools with process isolation for heavy models.
+- GPU/model runtime abstraction (CUDA, CoreML, TensorRT).
+- Remote detector workers where latency permits.
+- Shared event schema and session IDs across streams.
+- Central metrics collection.
+- Distributed detector health and reload propagation.
 
-## Phase 4: Event Definitions And DSL
+The distributed architecture preserves the core RVO contracts: bounded message
+paths, freshness-aware scheduling, typed signals, temporal event confirmation,
+best-effort evidence extraction.
 
-Move from one hardcoded dummy condition to configurable event definitions.
+## Platform Hardening (Cross-Phase)
 
-Target event definition:
+These apply across all phases:
 
-```yaml
-events:
-  - event_type: HEAD_AWAY_TOO_LONG
-    condition:
-      all:
-        - signal: FACE_PRESENT
-          op: eq
-          value: true
-        - signal: GAZE_STATE
-          op: eq
-          value: AWAY
-    duration_ms: 3000
-    cooldown_ms: 5000
-```
-
-Required capabilities:
-
-- multiple event definitions
-- independent event state per definition
-- `all` / `any` conditions
-- stale signal handling
-- event metadata
-- event ids
-- event confidence model
-
-## Phase 5: Real Evidence Pipeline
-
-Replace the simulated encoder worker with actual artifact creation.
-
-Capabilities:
-
-- clip file writing
-- metadata sidecar files
-- deterministic naming
-- pre-roll and post-roll support
-- dropped frame accounting
-- encoder latency metrics
-- bounded queue depth metrics
-
-Important design choice:
-
-- For post-roll clips, the system must delay final extraction until the
-  post-event window has actually passed, without blocking the scheduler.
-
-## Phase 6: External Interfaces
-
-Add interfaces for applications and distributed deployments.
-
-Event output:
-
-- local IPC publisher
-- optional HTTP pull endpoint
-- event schema with id, type, timestamp, confidence, metadata, and clip ref
-
-Control:
-
-- reload config
-- enable or disable detectors
-- adjust FPS caps
-- graceful shutdown
-
-Health:
-
-- fast `/health` endpoint
-- capture alive status
-- scheduler alive status
-- degraded status
-
-Security defaults:
-
-- bind local interfaces to localhost
-- keep auth outside the realtime runtime unless required by embedding systems
-
-## Phase 7: Load Shedding And Scheduling Policy
-
-Add explicit overload behavior.
-
-Policy inputs:
-
-- CPU load
-- detector execution latency
-- queue pressure
-- frame drop rate
-- detector cost hints
-
-Policy actions:
-
-- skip high-cost detectors first
-- reduce effective FPS for medium-cost detectors
-- preserve low-cost detectors where possible
-- emit degradation metrics
-
-Invariant:
-
-> RVO should degrade by doing less fresh work, not by accumulating stale work.
-
-## Phase 8: Multi-Stream And Distributed Runtime
-
-Move from one local camera to multiple streams and distributed components.
-
-Capabilities:
-
-- multiple camera or RTSP sources
-- per-stream scheduler instances
-- detector worker pools
-- process isolation for heavy models
-- remote detector workers where latency allows
-- shared event schema across streams
-- central metrics collection
-
-The distributed architecture should preserve the core RVO contracts:
-
-- bounded message paths
-- freshness-aware scheduling
-- typed signals
-- temporal event confirmation
-- best-effort evidence extraction
+- **Structured logging** — replace `println!` / `eprintln!` with `tracing`
+  or `log` + a JSON formatter.
+- **Per-detector config schemas** — currently only `busy_ns` is a detector-
+  level config field.
+- **Durable metadata storage** — event records are currently ephemeral
+  (log + file). A durable store (SQLite, append-only file, obj

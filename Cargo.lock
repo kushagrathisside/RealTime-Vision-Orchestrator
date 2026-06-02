@@ -475,6 +475,7 @@ name = "rvo-bin"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "crossbeam-channel",
  "env_logger",
  "log",
  "rvo-camera",
@@ -537,6 +538,7 @@ dependencies = [
 name = "rvo-events"
 version = "0.1.0"
 dependencies = [
+ "crossbeam-channel",
  "rvo-signals",
 ]
 

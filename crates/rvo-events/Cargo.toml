@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rvo-signals = { path = "../rvo-signals" }
+crossbeam-channel = "0.5"
+rvo-signals = { path = "../rvo-signals" 
