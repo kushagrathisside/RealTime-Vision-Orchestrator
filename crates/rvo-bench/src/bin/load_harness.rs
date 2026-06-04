@@ -66,13 +66,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use clap::Parser;
-use crossbeam_channel::bounded;
+use crossbeam_channel::{bounded, Receiver};
 use rvo_bench::{CounterSnapshot, CsvWriter, HistSummary};
 use rvo_buffer::{Frame, FrameBuffer};
 use rvo_clips::ClipManager;
 use rvo_detector::detector::{DetectorCostHint, DetectorNode};
 use rvo_detector::DummyDetector;
-use rvo_events::{Condition, EventDefinition, EventEngine, EventPublisher, EventType};
+use rvo_events::{Condition, Event, EventDefinition, EventEngine, EventPublisher, EventType};
+use rvo_metrics::METRICS;
 use rvo_scheduler::scheduler::Scheduler;
 use rvo_signals::store::SignalType;
 use rvo_testkit::LatencyDetector;
@@ -135,20 +136,32 @@ fn solid_frame(id: u64) -> Frame {
     }
 }
 
+/// Receivers that must be kept alive for the duration of a scenario run.
+///
+/// The harness does not consume events or clips — these channels exist only to
+/// satisfy the API. Dropping them before the scheduler runs causes every
+/// `publish()` / `on_event()` to see `Disconnected` and emit warning lines.
+struct _Sinks {
+    _event_rx: Receiver<Event>,
+    _clip_rx: Receiver<(rvo_clips::clip::ClipJob, Vec<Frame>)>,
+}
+
 /// Build the scheduler from a detector list and a shared frame buffer.
+/// Returns the scheduler, the frame sender, and the sink receivers.
+/// The caller must hold `_Sinks` alive for the entire scenario run.
 fn build_scheduler(
     detectors: Vec<Box<dyn DetectorNode>>,
     frame_buffer: Arc<Mutex<FrameBuffer>>,
-) -> (Scheduler, crossbeam_channel::Sender<Frame>) {
+) -> (Scheduler, crossbeam_channel::Sender<Frame>, _Sinks) {
     let (frame_tx, frame_rx) = bounded(64);
-    let (clip_tx, _clip_rx) = bounded(8);
+    let (clip_tx, clip_rx) = bounded(8);
     let clip_manager = ClipManager::new(
         clip_tx,
         Duration::from_secs(2),
         Duration::from_secs(1),
         Arc::clone(&frame_buffer),
     );
-    let (event_tx, _event_rx) = bounded(64);
+    let (event_tx, event_rx) = bounded(64);
     let event_publisher = EventPublisher::new(event_tx);
     let event_engine = EventEngine::new(EventDefinition {
         event_type: EventType::DummyEvent,
@@ -164,7 +177,11 @@ fn build_scheduler(
         event_publisher,
         Arc::clone(&frame_buffer),
     );
-    (scheduler, frame_tx)
+    let sinks = _Sinks {
+        _event_rx: event_rx,
+        _clip_rx: clip_rx,
+    };
+    (scheduler, frame_tx, sinks)
 }
 
 /// Build a `LatencyDetector` with explicit cost classification and declared fps.
@@ -324,10 +341,15 @@ fn run(cli: &Cli) -> std::io::Result<()> {
         scenario, cli.duration_secs, cli.warmup_secs, cli.sample_ms
     );
 
+    // Benchmark isolation: each scenario must start with empty counters and
+    // histograms. Without this, scenario N inherits all samples from scenario
+    // N-1, making cumulative tick counts and histograms meaningless.
+    METRICS.reset();
+
     // Build the pipeline.
     let frame_buffer = Arc::new(Mutex::new(FrameBuffer::new(300)));
     let detectors = detectors_for(scenario);
-    let (mut scheduler, frame_tx) = build_scheduler(detectors, Arc::clone(&frame_buffer));
+    let (mut scheduler, frame_tx, _sinks) = build_scheduler(detectors, Arc::clone(&frame_buffer));
 
     // Synthetic camera thread — sends at target fps with try_send (drops on full).
     let camera_fps = camera_fps_for(scenario).unwrap_or(30.0);

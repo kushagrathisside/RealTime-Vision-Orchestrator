@@ -40,6 +40,14 @@ impl LatencyHist {
             Err(_) => (0, 0, 0, 0),
         }
     }
+
+    /// Clear all samples. After this call `snapshot()` returns `(0, 0, 0, 0)`.
+    /// Used by the benchmark harness to isolate consecutive scenarios.
+    pub fn reset(&self) {
+        if let Ok(mut h) = self.0.lock() {
+            h.reset();
+        }
+    }
 }
 
 impl Default for LatencyHist {
@@ -85,6 +93,35 @@ pub struct Metrics {
     pub detector_exec_ns: LatencyHist,
     pub frame_staleness_ns: LatencyHist,
     pub remote_latency_ns: LatencyHist,
+}
+
+impl Metrics {
+    /// Reset every counter and histogram to zero.
+    ///
+    /// Called by the benchmark harness at the start of each scenario so that
+    /// measurements are fully isolated: scenario N cannot inherit samples from
+    /// scenario N-1. Not called in the production runtime.
+    pub fn reset(&self) {
+        // Counters
+        self.scheduler_ticks.store(0, Ordering::Relaxed);
+        self.detector_execs.store(0, Ordering::Relaxed);
+        self.detector_skips.store(0, Ordering::Relaxed);
+        self.detector_failures.store(0, Ordering::Relaxed);
+        self.detector_exec_ns_total.store(0, Ordering::Relaxed);
+        self.events_emitted.store(0, Ordering::Relaxed);
+        self.frame_drops.store(0, Ordering::Relaxed);
+        self.clip_drops.store(0, Ordering::Relaxed);
+        self.event_drops.store(0, Ordering::Relaxed);
+        // Gauges
+        self.frame_queue_depth.store(0, Ordering::Relaxed);
+        self.event_queue_depth.store(0, Ordering::Relaxed);
+        self.clip_pending_depth.store(0, Ordering::Relaxed);
+        // Histograms
+        self.tick_ns.reset();
+        self.detector_exec_ns.reset();
+        self.frame_staleness_ns.reset();
+        self.remote_latency_ns.reset();
+    }
 }
 
 pub static METRICS: Lazy<Metrics> = Lazy::new(|| Metrics {
@@ -186,5 +223,71 @@ mod tests {
         assert_eq!(count, 1);
         // Clamped into the top bucket (representative value is ~the 60s bound).
         assert!(p999 >= 59_000_000_000);
+    }
+
+    #[test]
+    fn latency_hist_reset_clears_samples() {
+        let h = LatencyHist::new();
+        h.record_ns(1_000);
+        h.record_ns(2_000);
+        assert_eq!(h.snapshot().3, 2, "should have 2 samples before reset");
+
+        h.reset();
+
+        let (p50, p99, p999, count) = h.snapshot();
+        assert_eq!(count, 0, "count must be 0 after reset");
+        assert_eq!(p50, 0);
+        assert_eq!(p99, 0);
+        assert_eq!(p999, 0);
+    }
+
+    #[test]
+    fn metrics_reset_clears_counters_and_histograms() {
+        // Use a freshly constructed Metrics instance to avoid touching the global
+        // static (which other tests and the runtime may be using concurrently).
+        let m = Metrics {
+            scheduler_ticks: AtomicU64::new(99),
+            detector_execs: AtomicU64::new(1),
+            detector_skips: AtomicU64::new(2),
+            detector_failures: AtomicU64::new(3),
+            detector_exec_ns_total: AtomicU64::new(4),
+            events_emitted: AtomicU64::new(5),
+            frame_drops: AtomicU64::new(6),
+            clip_drops: AtomicU64::new(7),
+            event_drops: AtomicU64::new(8),
+            frame_queue_depth: AtomicU64::new(9),
+            event_queue_depth: AtomicU64::new(10),
+            clip_pending_depth: AtomicU64::new(11),
+            tick_ns: LatencyHist::new(),
+            detector_exec_ns: LatencyHist::new(),
+            frame_staleness_ns: LatencyHist::new(),
+            remote_latency_ns: LatencyHist::new(),
+        };
+
+        m.tick_ns.record_ns(1_000);
+        m.detector_exec_ns.record_ns(2_000);
+        assert_eq!(m.tick_ns.snapshot().3, 1);
+
+        m.reset();
+
+        // All counters zeroed.
+        assert_eq!(m.scheduler_ticks.load(Ordering::Relaxed), 0);
+        assert_eq!(m.detector_execs.load(Ordering::Relaxed), 0);
+        assert_eq!(m.detector_skips.load(Ordering::Relaxed), 0);
+        assert_eq!(m.detector_failures.load(Ordering::Relaxed), 0);
+        assert_eq!(m.detector_exec_ns_total.load(Ordering::Relaxed), 0);
+        assert_eq!(m.events_emitted.load(Ordering::Relaxed), 0);
+        assert_eq!(m.frame_drops.load(Ordering::Relaxed), 0);
+        assert_eq!(m.clip_drops.load(Ordering::Relaxed), 0);
+        assert_eq!(m.event_drops.load(Ordering::Relaxed), 0);
+        assert_eq!(m.frame_queue_depth.load(Ordering::Relaxed), 0);
+        assert_eq!(m.event_queue_depth.load(Ordering::Relaxed), 0);
+        assert_eq!(m.clip_pending_depth.load(Ordering::Relaxed), 0);
+
+        // All histogram counts zeroed.
+        assert_eq!(m.tick_ns.snapshot().3, 0);
+        assert_eq!(m.detector_exec_ns.snapshot().3, 0);
+        assert_eq!(m.frame_staleness_ns.snapshot().3, 0);
+        assert_eq!(m.remote_latency_ns.snapshot().3, 0);
     }
 }
