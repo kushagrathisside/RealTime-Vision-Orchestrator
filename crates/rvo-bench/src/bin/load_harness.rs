@@ -1,13 +1,17 @@
 //! RVO macro load harness — produces per-interval time-series and end-of-run
-//! summary CSV files consumed by `scripts/plot.py`.
+//! summary CSV files, which feed the figures described in `docs/PLOT_GUIDE.md`.
 //!
 //! # Usage (always release + on bare-metal Linux, never WSL for p99 numbers)
 //!
 //!   cargo build -p rvo-bench --bin load_harness --release
-//!   ./target/release/load_harness --scenario baseline --duration-secs 30
-//!   ./target/release/load_harness --scenario load_shed --duration-secs 30
 //!
-//! Or run all scenarios via `scripts/bench.sh`.
+//!   # Run all 14 scenarios (clears summary.csv first, 2s pause between runs)
+//!   ./target/release/load_harness --all
+//!   ./target/release/load_harness --all --duration-secs 60   # longer runs
+//!
+//!   # Single scenario
+//!   ./target/release/load_harness --scenario load_shed
+//!   ./target/release/load_harness --scenario blocking_10ms --out-dir /tmp/bench
 //!
 //! # Scenarios
 //!
@@ -75,15 +79,35 @@ use rvo_testkit::LatencyDetector;
 
 // ---------- CLI -------------------------------------------------------------
 
+const ALL_SCENARIOS: &[&str] = &[
+    "baseline",
+    "inproc_low",
+    "blocking_1ms",
+    "blocking_3ms",
+    "blocking_10ms",
+    "blocking_50ms",
+    "load_shed",
+    "overload_threshold",
+    "overload_moderate",
+    "overload_severe",
+    "fps_30",
+    "fps_60",
+    "fps_120",
+    "fps_300",
+];
+
 #[derive(Parser)]
 #[command(name = "load_harness", about = "RVO macro load harness")]
 struct Cli {
-    /// Which scenario to run.
+    /// Scenario to run. Ignored when --all is set.
     #[arg(long, default_value = "baseline")]
     scenario: String,
 
-    /// How long to run the scenario (seconds). Exclude the first
-    /// `--warmup-secs` for percentile measurement.
+    /// Run all scenarios sequentially (overrides --scenario).
+    #[arg(long)]
+    all: bool,
+
+    /// Measurement window per scenario in seconds (warm-up excluded).
     #[arg(long, default_value_t = 30)]
     duration_secs: u64,
 
@@ -169,8 +193,8 @@ fn detectors_for(scenario: &str) -> Vec<Box<dyn DetectorNode>> {
         // that a slow in-process detector directly delays every tick.
         "baseline" => vec![],
         "inproc_low" => vec![Box::new(DummyDetector)],
-        "blocking_1ms"  => vec![latency_detector(1,  DetectorCostHint::Low, 30.0)],
-        "blocking_3ms"  => vec![latency_detector(3,  DetectorCostHint::Low, 30.0)],
+        "blocking_1ms" => vec![latency_detector(1, DetectorCostHint::Low, 30.0)],
+        "blocking_3ms" => vec![latency_detector(3, DetectorCostHint::Low, 30.0)],
         "blocking_10ms" => vec![latency_detector(10, DetectorCostHint::Low, 30.0)],
         "blocking_50ms" => vec![latency_detector(50, DetectorCostHint::Low, 30.0)],
 
@@ -186,14 +210,14 @@ fn detectors_for(scenario: &str) -> Vec<Box<dyn DetectorNode>> {
         // camera outpaces the scheduler → bounded channel saturates → frame drops.
         // Low cost keeps the detector from being shed (we want slow ticks, not avoided ones).
         "overload_threshold" => vec![latency_detector(5, DetectorCostHint::Low, 1000.0)],
-        "overload_moderate"  => vec![latency_detector(5, DetectorCostHint::Low, 1000.0)],
-        "overload_severe"    => vec![latency_detector(5, DetectorCostHint::Low, 1000.0)],
+        "overload_moderate" => vec![latency_detector(5, DetectorCostHint::Low, 1000.0)],
+        "overload_severe" => vec![latency_detector(5, DetectorCostHint::Low, 1000.0)],
 
         // fps reference group: DummyDetector is µs-cost so tick rate stays ~2000/s,
         // well above any fps tested here. No drops are expected — this is the fast-pipeline
         // reference that shows the overload group's drops are caused by the slow detector.
-        "fps_30"  => vec![Box::new(DummyDetector)],
-        "fps_60"  => vec![Box::new(DummyDetector)],
+        "fps_30" => vec![Box::new(DummyDetector)],
+        "fps_60" => vec![Box::new(DummyDetector)],
         "fps_120" => vec![Box::new(DummyDetector)],
         "fps_300" => vec![Box::new(DummyDetector)],
 
@@ -207,13 +231,13 @@ fn detectors_for(scenario: &str) -> Vec<Box<dyn DetectorNode>> {
 /// Target synthetic camera fps for scenarios that need a camera feed.
 fn camera_fps_for(scenario: &str) -> Option<f64> {
     match scenario {
-        "fps_30"  => Some(30.0),
-        "fps_60"  => Some(60.0),
+        "fps_30" => Some(30.0),
+        "fps_60" => Some(60.0),
         "fps_120" => Some(120.0),
         "fps_300" => Some(300.0),
         "overload_threshold" => Some(120.0),
-        "overload_moderate"  => Some(300.0),
-        "overload_severe"    => Some(600.0),
+        "overload_moderate" => Some(300.0),
+        "overload_severe" => Some(600.0),
         _ => None,
     }
 }
@@ -373,11 +397,11 @@ fn run(cli: &Cli) -> std::io::Result<()> {
     let final_counters = CounterSnapshot::capture();
 
     let detector_sleep_ms: u64 = match scenario.as_str() {
-        "blocking_1ms"  => 1,
-        "blocking_3ms"  => 3,
+        "blocking_1ms" => 1,
+        "blocking_3ms" => 3,
         "blocking_10ms" => 10,
         "blocking_50ms" => 50,
-        "load_shed"     => 50,
+        "load_shed" => 50,
         s if s.starts_with("overload_") => 5,
         _ => 0,
     };
@@ -413,8 +437,60 @@ fn run(cli: &Cli) -> std::io::Result<()> {
 
 fn main() {
     let cli = Cli::parse();
-    if let Err(err) = run(&cli) {
-        eprintln!("[harness] error: {}", err);
-        std::process::exit(1);
+
+    let scenarios: Vec<&str> = if cli.all {
+        ALL_SCENARIOS.to_vec()
+    } else {
+        vec![cli.scenario.as_str()]
+    };
+
+    let total = scenarios.len();
+    for (i, scenario) in scenarios.iter().enumerate() {
+        if total > 1 {
+            println!(
+                "\n══════════════════════════════════════════════\n \
+                 Scenario {}/{}: {}\n\
+                 ══════════════════════════════════════════════",
+                i + 1,
+                total,
+                scenario
+            );
+        }
+        // Build a per-scenario Cli with the scenario name overridden.
+        let per = Cli {
+            scenario: scenario.to_string(),
+            all: false,
+            duration_secs: cli.duration_secs,
+            warmup_secs: cli.warmup_secs,
+            sample_ms: cli.sample_ms,
+            out_dir: cli.out_dir.clone(),
+        };
+        // summary.csv must be cleared before the first scenario so we don't
+        // append to a stale file from a previous run.
+        if i == 0 {
+            let sum_path = per.out_dir.join("summary.csv");
+            if sum_path.exists() {
+                if let Err(e) = std::fs::remove_file(&sum_path) {
+                    eprintln!("[harness] warning: could not remove stale summary: {}", e);
+                }
+            }
+        }
+        if let Err(err) = run(&per) {
+            eprintln!("[harness] error in {}: {}", scenario, err);
+            std::process::exit(1);
+        }
+        // Brief pause between scenarios so the OS scheduler settles.
+        if i + 1 < total {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+        }
+    }
+
+    if total > 1 {
+        println!(
+            "\n[harness] all {} scenarios done. Results in {}/",
+            total,
+            cli.out_dir.display()
+        );
+        println!("[harness] see docs/PLOT_GUIDE.md to generate figures.");
     }
 }

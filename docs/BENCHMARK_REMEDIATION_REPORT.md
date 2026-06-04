@@ -160,10 +160,13 @@ overload_*:   checks total_frame_drops > 0 (channel must have saturated)
 This prevents silent false-positive results where numbers look plausible but the
 mechanism under test was never exercised.
 
-### 2.3 `scripts/bench.sh` — updated scenario list
+### 2.3 `load_harness` — `--all` flag replaces shell script
 
-Added `overload_threshold`, `overload_moderate`, `overload_severe` to `ALL_SCENARIOS`.
-Organised scenarios into labelled groups matching the documentation.
+Removed `scripts/bench.sh`. Added `--all` flag and a `ALL_SCENARIOS` constant to
+`load_harness`. Running `./load_harness --all` is now the single command to run every
+scenario, with automatic `summary.csv` cleanup before the first run and a 2-second pause
+between scenarios. The new `overload_threshold`, `overload_moderate`, and `overload_severe`
+scenarios are included in `ALL_SCENARIOS`.
 
 ### 2.4 Plotting pipeline — updated figures
 

@@ -2,7 +2,7 @@
 
 This document describes the five benchmark figures that the RVO bench suite
 produces, what each one proves, and how to recreate them from the CSV files that
-`bench.sh` generates.
+`load_harness --all` generates.
 
 `scripts/plot.py` is the local plotting script used for paper and report writing.
 It is not tracked in the repository. You can recreate it in any tool you prefer
@@ -15,8 +15,9 @@ need: CSV schema, axes, and the claim each figure must support.
 
 ```bash
 # on bare-metal Linux with performance governor set
-bash scripts/bench.sh            # 30s per scenario, output → target/bench_results/
-bash scripts/bench.sh --duration 60  # 60s for more p99.9 samples
+cargo build -p rvo-bench --bin load_harness --release
+./target/release/load_harness --all                      # 30s per scenario
+./target/release/load_harness --all --duration-secs 60   # 60s for more p99.9 samples
 ```
 
 All output lands in `target/bench_results/` (gitignored). Two file types:

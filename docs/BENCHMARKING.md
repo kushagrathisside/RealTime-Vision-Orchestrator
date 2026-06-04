@@ -53,9 +53,6 @@ crates/rvo-bench/
   src/bin/load_harness.rs   ← macro load harness (sustained run, CSV output)
   src/lib.rs                ← HistSummary, CounterSnapshot, CsvWriter shared by harness
 
-scripts/
-  bench.sh                  ← runs all 15 load-harness scenarios, produces CSVs
-
 target/bench_results/       ← harness output (CSVs); gitignored
 target/criterion/           ← criterion HTML reports; created by cargo bench
 docs/report/figures/        ← generated figures; gitignored
@@ -148,31 +145,28 @@ adding 8 real detectors costs at minimum X µs/tick of overhead (detector work i
 
 ## 5. Running the macro load harness
 
-### One command: all 11 scenarios
+### One command: all 14 scenarios
 
 ```bash
-bash scripts/bench.sh
+cargo build -p rvo-bench --bin load_harness --release
+./target/release/load_harness --all
 ```
 
-This builds the harness in release (enforces LTO + codegen-units=1), runs all 11 scenarios
-with 30s duration + 5s warm-up, and appends each result to `target/bench_results/summary.csv`.
+This runs all 14 scenarios sequentially (30s + 5s warm-up each), appending each result to
+`target/bench_results/summary.csv`. The `summary.csv` from any previous run is removed
+automatically before the first scenario starts.
 
-### Custom duration / scenario subset
+### Custom duration / single scenario
 
 ```bash
 # 60-second runs (better p99.9 sample count)
-bash scripts/bench.sh --duration 60
+./target/release/load_harness --all --duration-secs 60
 
-# Specific scenarios only
-bash scripts/bench.sh --scenarios "baseline blocking_3ms blocking_50ms load_shed"
+# Single scenario
+./target/release/load_harness --scenario blocking_10ms --duration-secs 30
 
-# Single scenario manually (useful during iteration)
-./target/release/load_harness \
-  --scenario blocking_10ms \
-  --duration-secs 30 \
-  --warmup-secs 5 \
-  --sample-ms 1000 \
-  --out-dir target/bench_results
+# Single scenario, custom output dir
+./target/release/load_harness --scenario load_shed --out-dir /tmp/bench
 ```
 
 ### The 15 scenarios
@@ -432,9 +426,11 @@ To run 5 times and compute median + CI manually:
 
 ```bash
 for i in 1 2 3 4 5; do
-  rm -f target/bench_results/summary.csv
-  bash scripts/bench.sh --scenarios "baseline blocking_10ms load_shed" --duration 60
+  ./target/release/load_harness --scenario baseline --duration-secs 60
+  ./target/release/load_harness --scenario blocking_10ms --duration-secs 60
+  ./target/release/load_harness --scenario load_shed --duration-secs 60
   cp target/bench_results/summary.csv target/bench_results/summary_run${i}.csv
+  rm target/bench_results/summary.csv
 done
 
 # Then in Python:
@@ -452,7 +448,7 @@ print(combined.groupby("scenario")[["tick_p99_ns","tick_p999_ns"]].agg(["median"
    [load_harness.rs](../crates/rvo-bench/src/bin/load_harness.rs).
 2. If it needs a different camera fps, add it to `camera_fps_for()`.
 3. If it has a meaningful `detector_sleep_ms`, add it to the lookup near the end of `run()`.
-4. Add the scenario to `ALL_SCENARIOS` in [bench.sh](../scripts/bench.sh).
+4. Add the scenario name to `ALL_SCENARIOS` in [load_harness.rs](../crates/rvo-bench/src/bin/load_harness.rs) so `--all` includes it.
 5. If the scenario should validate that a mechanism fired, add a case to `validate_scenario()`.
 6. Update [PLOT_GUIDE.md](PLOT_GUIDE.md) with the scenario's axes and expected output.
 
@@ -471,9 +467,9 @@ any budget and will trigger backoff via the OVERRUN_FACTOR gate.
 
 ### summary.csv keeps appending across runs
 
-`bench.sh` deletes `summary.csv` at the start of a full run. If you run individual
-scenarios manually without clearing first, rows accumulate. Clear manually before a clean
-measurement session:
+`--all` removes `summary.csv` automatically before the first scenario. If you run
+individual scenarios manually without clearing first, rows accumulate. Clear manually
+before a clean measurement session:
 
 ```bash
 rm -f target/bench_results/summary.csv
