@@ -286,7 +286,13 @@ fn camera_fps_for(scenario: &str) -> Option<f64> {
 ///
 /// `duration_secs` is the measurement window (excludes warm-up) and is used to
 /// compute the effective tick rate for overload validation.
-fn validate_scenario(scenario: &str, hist: &HistSummary, counters: &CounterSnapshot, duration_secs: u64, actual_camera_fps: f64) {
+fn validate_scenario(
+    scenario: &str,
+    hist: &HistSummary,
+    counters: &CounterSnapshot,
+    duration_secs: u64,
+    actual_camera_fps: f64,
+) {
     match scenario {
         // ---- HOL-blocking group ------------------------------------------------
         // Tick rate >> camera 30 fps for all sub-scenarios except blocking_50ms.
@@ -333,7 +339,8 @@ fn validate_scenario(scenario: &str, hist: &HistSummary, counters: &CounterSnaps
                 );
             } else {
                 println!(
-                    "[BENCH VALIDATION OK] {}: tick_p50={:.2}ms ≈ {}ms injected sleep, 0 frame drops",
+                    "[BENCH VALIDATION OK] {}: tick_p50={:.2}ms ≈ {}ms injected sleep, \
+                     0 frame drops",
                     scenario, tick_p50_ms, expected_ms as u64
                 );
             }
@@ -610,7 +617,9 @@ fn run(cli: &Cli, run_id: u64) -> std::io::Result<()> {
     // This is more accurate than the configured fps for scenarios where thread::sleep
     // granularity limits the actual send rate (high-fps scenarios).
     let actual_camera_fps = {
-        let frames_in_window = frames_sent.load(Ordering::Relaxed).saturating_sub(frames_at_warmup_end);
+        let frames_in_window = frames_sent
+            .load(Ordering::Relaxed)
+            .saturating_sub(frames_at_warmup_end);
         frames_in_window as f64 / cli.duration_secs as f64
     };
 
